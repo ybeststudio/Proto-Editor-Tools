@@ -34,11 +34,37 @@ namespace {
     std::string wideToUtf8(const std::wstring& w) {
         return wideToCp(w, CP_UTF8);
     }
+
+    bool canDecodeWithCodePage(const std::vector<char>& raw, UINT cp) {
+        if (raw.empty()) {
+            return true;
+        }
+
+        const int size = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, raw.data(), (int)raw.size(), nullptr, 0);
+        return size > 0;
+    }
+
+    size_t countHangulChars(const std::wstring& text) {
+        size_t count = 0;
+        for (wchar_t ch : text) {
+            if ((ch >= 0x1100 && ch <= 0x11FF) ||
+                (ch >= 0x3130 && ch <= 0x318F) ||
+                (ch >= 0xAC00 && ch <= 0xD7AF)) {
+                ++count;
+            }
+        }
+        return count;
+    }
 }
 
 std::string TsvFile::detectEncoding(const std::vector<char>& raw) {
     if (raw.size() >= 3 && (unsigned char)raw[0] == 0xEF && (unsigned char)raw[1] == 0xBB && (unsigned char)raw[2] == 0xBF)
         return "UTF-8-BOM";
+    if (raw.size() >= 2 && (unsigned char)raw[0] == 0xFF && (unsigned char)raw[1] == 0xFE)
+        return "UTF-16LE";
+    if (raw.size() >= 2 && (unsigned char)raw[0] == 0xFE && (unsigned char)raw[1] == 0xFF)
+        return "UTF-16BE";
+
     int invalid = 0;
     for (size_t i = 0; i < raw.size(); ++i) {
         unsigned char c = raw[i];
@@ -59,7 +85,21 @@ std::string TsvFile::detectEncoding(const std::vector<char>& raw) {
         }
     }
     if (invalid == 0) return "UTF-8";
-    return "CP1254";
+
+    if (canDecodeWithCodePage(raw, 949)) {
+        const std::wstring decoded = cpToWide(std::string(raw.begin(), raw.end()), 949);
+        if (countHangulChars(decoded) > 0) {
+            return "CP949";
+        }
+    }
+
+    if (canDecodeWithCodePage(raw, 1254)) {
+        return "CP1254";
+    }
+    if (canDecodeWithCodePage(raw, 1252)) {
+        return "CP1252";
+    }
+    return "CP949";
 }
 
 std::wstring TsvFile::decodeToWide(const std::vector<char>& raw, const std::string& enc) {
@@ -68,14 +108,54 @@ std::wstring TsvFile::decodeToWide(const std::vector<char>& raw, const std::stri
     if (enc == "UTF-8-BOM" && raw.size() >= 3) {
         offset = 3;
     }
+    if (enc == "UTF-16LE") {
+        const wchar_t* data = reinterpret_cast<const wchar_t*>(raw.data() + 2);
+        const size_t wcharCount = (raw.size() - 2) / sizeof(wchar_t);
+        return std::wstring(data, data + wcharCount);
+    }
+    if (enc == "UTF-16BE") {
+        std::wstring out;
+        out.reserve((raw.size() - 2) / 2);
+        for (size_t i = 2; i + 1 < raw.size(); i += 2) {
+            wchar_t ch = static_cast<wchar_t>((static_cast<unsigned char>(raw[i]) << 8) | static_cast<unsigned char>(raw[i + 1]));
+            out.push_back(ch);
+        }
+        return out;
+    }
+
     std::string s(raw.begin() + static_cast<std::ptrdiff_t>(offset), raw.end());
     if (enc == "UTF-8" || enc == "UTF-8-BOM") return utf8ToWide(s);
-    UINT cp = (enc == "CP1254") ? 1254 : (enc == "CP1252") ? 1252 : 1252;
+    UINT cp = 1252;
+    if (enc == "CP1254") cp = 1254;
+    else if (enc == "CP949") cp = 949;
     return cpToWide(s, cp);
 }
 
 std::vector<char> TsvFile::encodeFromWide(const std::wstring& text, const std::string& enc) {
-    std::string s = (enc == "UTF-8" || enc == "UTF-8-BOM") ? wideToUtf8(text) : wideToCp(text, (enc == "CP1254") ? 1254 : 1252);
+    if (enc == "UTF-16LE") {
+        std::vector<char> out;
+        out.push_back(static_cast<char>(0xFF));
+        out.push_back(static_cast<char>(0xFE));
+        const char* bytes = reinterpret_cast<const char*>(text.data());
+        out.insert(out.end(), bytes, bytes + (text.size() * sizeof(wchar_t)));
+        return out;
+    }
+
+    if (enc == "UTF-16BE") {
+        std::vector<char> out;
+        out.push_back(static_cast<char>(0xFE));
+        out.push_back(static_cast<char>(0xFF));
+        for (wchar_t ch : text) {
+            out.push_back(static_cast<char>((ch >> 8) & 0xFF));
+            out.push_back(static_cast<char>(ch & 0xFF));
+        }
+        return out;
+    }
+
+    UINT cp = 1252;
+    if (enc == "CP1254") cp = 1254;
+    else if (enc == "CP949") cp = 949;
+    std::string s = (enc == "UTF-8" || enc == "UTF-8-BOM") ? wideToUtf8(text) : wideToCp(text, cp);
     std::vector<char> out;
     if (enc == "UTF-8-BOM") {
         out.push_back(static_cast<char>(0xEF));

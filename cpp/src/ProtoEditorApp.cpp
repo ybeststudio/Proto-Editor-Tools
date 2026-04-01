@@ -179,6 +179,140 @@ namespace {
         return buffer;
     }
 
+    std::vector<std::wstring> splitClipboardLines(const std::wstring& text) {
+        std::vector<std::wstring> lines;
+        std::wstring current;
+        for (wchar_t ch : text) {
+            if (ch == L'\r') {
+                continue;
+            }
+            if (ch == L'\n') {
+                lines.push_back(current);
+                current.clear();
+                continue;
+            }
+            current.push_back(ch);
+        }
+        if (!current.empty() || lines.empty()) {
+            lines.push_back(current);
+        }
+        return lines;
+    }
+
+    std::vector<std::vector<std::wstring>> splitClipboardGrid(const std::wstring& text) {
+        std::vector<std::vector<std::wstring>> grid;
+        std::vector<std::wstring> row;
+        std::wstring cell;
+        bool inQuotes = false;
+
+        auto flushCell = [&]() {
+            row.push_back(cell);
+            cell.clear();
+        };
+
+        auto flushRow = [&]() {
+            flushCell();
+            grid.push_back(row);
+            row.clear();
+        };
+
+        for (size_t i = 0; i < text.size(); ++i) {
+            const wchar_t ch = text[i];
+            if (ch == L'"') {
+                if (inQuotes && i + 1 < text.size() && text[i + 1] == L'"') {
+                    cell.push_back(L'"');
+                    ++i;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+                continue;
+            }
+            if (!inQuotes && ch == L'\t') {
+                flushCell();
+                continue;
+            }
+            if (!inQuotes && ch == L'\r') {
+                continue;
+            }
+            if (!inQuotes && ch == L'\n') {
+                flushRow();
+                continue;
+            }
+            cell.push_back(ch);
+        }
+
+        if (!cell.empty() || !row.empty() || grid.empty()) {
+            flushRow();
+        }
+
+        return grid;
+    }
+
+    std::wstring joinClipboardGrid(const std::vector<std::vector<std::wstring>>& grid) {
+        std::wstring result;
+        for (size_t rowIndex = 0; rowIndex < grid.size(); ++rowIndex) {
+            for (size_t colIndex = 0; colIndex < grid[rowIndex].size(); ++colIndex) {
+                if (colIndex > 0) {
+                    result += L'\t';
+                }
+                result += grid[rowIndex][colIndex];
+            }
+            if (rowIndex + 1 < grid.size()) {
+                result += L"\r\n";
+            }
+        }
+        return result;
+    }
+
+    bool setClipboardUnicodeText(HWND hwnd, const std::wstring& text) {
+        if (!OpenClipboard(hwnd)) {
+            return false;
+        }
+        EmptyClipboard();
+        const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if (memory == nullptr) {
+            CloseClipboard();
+            return false;
+        }
+
+        void* locked = GlobalLock(memory);
+        if (locked == nullptr) {
+            GlobalFree(memory);
+            CloseClipboard();
+            return false;
+        }
+
+        memcpy(locked, text.c_str(), bytes);
+        GlobalUnlock(memory);
+        SetClipboardData(CF_UNICODETEXT, memory);
+        CloseClipboard();
+        return true;
+    }
+
+    std::wstring getClipboardUnicodeText(HWND hwnd) {
+        if (!OpenClipboard(hwnd)) {
+            return {};
+        }
+
+        HANDLE data = GetClipboardData(CF_UNICODETEXT);
+        if (data == nullptr) {
+            CloseClipboard();
+            return {};
+        }
+
+        const wchar_t* text = static_cast<const wchar_t*>(GlobalLock(data));
+        if (text == nullptr) {
+            CloseClipboard();
+            return {};
+        }
+
+        const std::wstring result(text);
+        GlobalUnlock(data);
+        CloseClipboard();
+        return result;
+    }
+
     constexpr int kDatasetCount = 2;
 }
 
@@ -591,6 +725,15 @@ void ProtoEditorApp::renderFrame() {
     if (showThemeBuilder_) {
         drawThemeBuilder();
     }
+    if (showVnumToolsPanel_) {
+        drawVnumToolsPanel();
+    }
+    if (showSnapshotManagerPanel_) {
+        drawSnapshotManagerPanel();
+    }
+    if (showDependencyPanel_) {
+        drawDependencyPanel();
+    }
 
     ImGui::Render();
 
@@ -774,6 +917,9 @@ void ProtoEditorApp::drawMenuBar() {
         ImGui::MenuItem(tr("Linked Names Panel", u8"Ba\u011Fl\u0131 Names Paneli"), nullptr, &showLinkedNamesPanel_);
         ImGui::MenuItem(tr("Workspace Presets", u8"\u00C7al\u0131\u015Fma Alan\u0131 Presetleri"), nullptr, &showWorkspacePanel_);
         ImGui::MenuItem(tr("Rule Presets", u8"Kural Presetleri"), nullptr, &showRulePresetPanel_);
+        ImGui::MenuItem(tr("VNUM Tools", "VNUM Araçları"), nullptr, &showVnumToolsPanel_);
+        ImGui::MenuItem(tr("Snapshot Manager", "Snapshot Yöneticisi"), nullptr, &showSnapshotManagerPanel_);
+        ImGui::MenuItem(tr("Dependency Checker", "Bağımlılık Denetleyici"), nullptr, &showDependencyPanel_);
         ImGui::EndMenu();
     }
 
@@ -790,7 +936,7 @@ void ProtoEditorApp::drawMenuBar() {
 
 void ProtoEditorApp::drawToolbar() {
     ImGui::SetNextWindowPos(ImVec2(12.0f, 34.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x - 24.0f, 68.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x - 24.0f, 92.0f), ImGuiCond_Always);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
 
     if (!ImGui::Begin(tr("Toolbar", u8"Ara\u00E7 \u00C7ubu\u011Fu"), nullptr, flags)) {
@@ -861,8 +1007,8 @@ void ProtoEditorApp::drawToolbar() {
 }
 
 void ProtoEditorApp::drawSidebar() {
-    ImGui::SetNextWindowPos(ImVec2(12.0f, 110.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(280.0f, ImGui::GetIO().DisplaySize.y - 158.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(12.0f, 134.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(280.0f, ImGui::GetIO().DisplaySize.y - 182.0f), ImGuiCond_Always);
 
     if (!ImGui::Begin(tr("Workspace", "Çalışma Alanı"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::End();
@@ -927,9 +1073,17 @@ void ProtoEditorApp::drawSidebar() {
                 const std::string columnName = wideToUtf8(dataset.table.header()[i]);
                 if (ImGui::Selectable(columnName.c_str(), selected)) {
                     dataset.selectedColumn = static_cast<int>(i);
+                    dataset.selectEntireColumn = false;
                 }
             }
             ImGui::EndCombo();
+        }
+    }
+
+    if (dataset.loaded && dataset.selectedColumn >= 0) {
+        bool entireColumn = dataset.selectEntireColumn;
+        if (ImGui::Checkbox(tr("Select entire column", "Tüm kolonu seç"), &entireColumn)) {
+            dataset.selectEntireColumn = entireColumn;
         }
     }
 
@@ -1015,8 +1169,8 @@ void ProtoEditorApp::drawSidebar() {
 }
 
 void ProtoEditorApp::drawTablePanel() {
-    ImGui::SetNextWindowPos(ImVec2(304.0f, 110.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x - 628.0f, ImGui::GetIO().DisplaySize.y - 158.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(304.0f, 134.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x - 628.0f, ImGui::GetIO().DisplaySize.y - 182.0f), ImGuiCond_Always);
 
     if (!ImGui::Begin(tr("Proto Grid", "Proto Grid"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::End();
@@ -1102,7 +1256,16 @@ void ProtoEditorApp::drawTablePanel() {
                 for (size_t renderIndex = 0; renderIndex < renderColumns.size(); ++renderIndex) {
                     const int column = renderColumns[renderIndex];
                     ImGui::TableSetColumnIndex(static_cast<int>(renderIndex));
-                    const bool selected = dataset.selectedRow == filteredIndex && dataset.selectedColumn == column;
+                    const int blockRowMin = (std::min)(dataset.blockStartRow, dataset.blockEndRow);
+                    const int blockRowMax = (std::max)(dataset.blockStartRow, dataset.blockEndRow);
+                    const int blockColMin = (std::min)(dataset.blockStartColumn, dataset.blockEndColumn);
+                    const int blockColMax = (std::max)(dataset.blockStartColumn, dataset.blockEndColumn);
+                    const bool blockSelected = dataset.blockSelectionActive &&
+                        filteredIndex >= blockRowMin && filteredIndex <= blockRowMax &&
+                        column >= blockColMin && column <= blockColMax;
+                    const bool selected = blockSelected ||
+                        (dataset.selectEntireColumn && dataset.selectedColumn == column) ||
+                        (dataset.selectedRow == filteredIndex && dataset.selectedColumn == column);
                     const bool modified = dataset.modifiedCells.find({ sourceRow, column }) != dataset.modifiedCells.end();
 
                     if (preferences_.highlightModified && modified) {
@@ -1116,9 +1279,23 @@ void ProtoEditorApp::drawTablePanel() {
                     }
 
                     ImGui::PushID(static_cast<int>(sourceRow * 1000 + column));
-                    if (ImGui::Selectable(cellText.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns)) {
-                        dataset.selectedRow = filteredIndex;
-                        dataset.selectedColumn = column;
+                    if (ImGui::Selectable(cellText.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                        if (GetKeyState(VK_SHIFT) & 0x8000) {
+                            if (!dataset.blockSelectionActive) {
+                                dataset.blockStartRow = dataset.selectedRow >= 0 ? dataset.selectedRow : filteredIndex;
+                                dataset.blockStartColumn = dataset.selectedColumn >= 0 ? dataset.selectedColumn : column;
+                            }
+                            dataset.blockEndRow = filteredIndex;
+                            dataset.blockEndColumn = column;
+                            dataset.blockSelectionActive = true;
+                        } else {
+                            dataset.selectedRow = filteredIndex;
+                            dataset.selectedColumn = column;
+                            dataset.selectEntireColumn = false;
+                            clearBlockSelection(dataset);
+                            dataset.dependenciesScanned = false;
+                            dataset.dependencyEntries.clear();
+                        }
                         if (ImGui::IsMouseDoubleClicked(0)) {
                             if (dataset.config.isFlagColumn(dataset.table.header()[column])) {
                                 openFlagEditor(dataset, sourceRow, column);
@@ -1126,6 +1303,105 @@ void ProtoEditorApp::drawTablePanel() {
                                 openCellEditor(dataset, sourceRow, column);
                             }
                         }
+                    }
+                    if (ImGui::BeginPopupContextItem()) {
+                        dataset.selectedRow = filteredIndex;
+                        dataset.selectedColumn = column;
+                        dataset.selectEntireColumn = false;
+                        dataset.dependenciesScanned = false;
+                        dataset.dependencyEntries.clear();
+                        if (!blockSelected) {
+                            clearBlockSelection(dataset);
+                        }
+
+                        ImGui::TextDisabled("%s", wideToUtf8(dataset.table.header()[column]).c_str());
+                        ImGui::Separator();
+                        if (ImGui::MenuItem(tr("Copy", "Kopyala"), "Ctrl+C")) {
+                            copySelectionToClipboard(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Cut", "Kes"))) {
+                            cutSelectionToClipboard(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Paste", "Yapıştır"), "Ctrl+V")) {
+                            pasteClipboardIntoSelection(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Clear", "Temizle"))) {
+                            clearSelectionContent(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Clear selected block", "Seçili bloğu temizle"), nullptr, false, hasBlockSelection(dataset))) {
+                            clearSelectedBlock(dataset);
+                        }
+                        ImGui::Separator();
+                        if (ImGui::MenuItem(tr("Copy column", "Kolonu kopyala"))) {
+                            dataset.selectedRow = filteredIndex;
+                            dataset.selectedColumn = column;
+                            dataset.selectEntireColumn = true;
+                            copyCurrentColumnBuffer(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Paste column", "Kolonu yapıştır"), nullptr, false, !copiedColumnBuffer_.empty())) {
+                            dataset.selectedRow = filteredIndex;
+                            dataset.selectedColumn = column;
+                            dataset.selectEntireColumn = true;
+                            pasteCurrentColumnBuffer(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Add column", "Kolon ekle"))) {
+                            dataset.selectedColumn = column;
+                            columnAction_ = 0;
+                            columnTargetIndex_ = column;
+                            columnNameBuffer_.clear();
+                            columnManagerModalOpen_ = true;
+                            ImGui::OpenPopup(tr("Column Manager###ColumnManager", "Kolon Yöneticisi###ColumnManager"));
+                        }
+                        ImGui::Separator();
+                        if (ImGui::MenuItem(tr("Find in this column", "Bu kolonda ara"))) {
+                            dataset.filterColumn = column;
+                        }
+                        if (ImGui::MenuItem(tr("Bulk replace in this column", "Bu kolonda toplu değiştir"))) {
+                            dataset.selectedColumn = column;
+                            bulkEditMode_ = 1;
+                            bulkFindBuffer_.clear();
+                            bulkReplaceBuffer_.clear();
+                            bulkVisibleRowsOnly_ = true;
+                            bulkEditModalOpen_ = true;
+                            ImGui::OpenPopup(tr("Bulk Column Tools###BulkColumnTools", "Toplu Kolon Araçları###BulkColumnTools"));
+                        }
+                        if (ImGui::MenuItem(tr("Bulk set in this column", "Bu kolonda toplu değer ata"))) {
+                            dataset.selectedColumn = column;
+                            bulkEditMode_ = 0;
+                            bulkValueBuffer_.clear();
+                            bulkVisibleRowsOnly_ = true;
+                            bulkEditModalOpen_ = true;
+                            ImGui::OpenPopup(tr("Bulk Column Tools###BulkColumnTools", "Toplu Kolon Araçları###BulkColumnTools"));
+                        }
+                        ImGui::Separator();
+                        if (ImGui::MenuItem(tr("Select entire column", "Tüm kolonu seç"), "Ctrl+A")) {
+                            dataset.selectedRow = filteredIndex;
+                            dataset.selectedColumn = column;
+                            dataset.selectEntireColumn = true;
+                            clearBlockSelection(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Start block selection", "Blok seçimi başlat"))) {
+                            dataset.blockSelectionActive = true;
+                            dataset.blockStartRow = filteredIndex;
+                            dataset.blockEndRow = filteredIndex;
+                            dataset.blockStartColumn = column;
+                            dataset.blockEndColumn = column;
+                            dataset.selectEntireColumn = false;
+                        }
+                        if (ImGui::MenuItem(tr("Duplicate row", "Satırı kopyala"))) {
+                            duplicateSelectedRow(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Delete row", "Satırı sil"))) {
+                            deleteSelectedRow(dataset);
+                        }
+                        if (ImGui::MenuItem(tr("Open editor", "Düzenleyiciyi aç"))) {
+                            if (dataset.config.isFlagColumn(dataset.table.header()[column])) {
+                                openFlagEditor(dataset, sourceRow, column);
+                            } else {
+                                openCellEditor(dataset, sourceRow, column);
+                            }
+                        }
+                        ImGui::EndPopup();
                     }
                     if (selected && requestScrollToSelection_) {
                         ImGui::SetScrollHereY(0.35f);
@@ -1154,8 +1430,8 @@ void ProtoEditorApp::drawTablePanel() {
 }
 
 void ProtoEditorApp::drawInspectorPanel() {
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 312.0f, 110.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(300.0f, ImGui::GetIO().DisplaySize.y - 158.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 312.0f, 134.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(300.0f, ImGui::GetIO().DisplaySize.y - 182.0f), ImGuiCond_Always);
 
     if (!ImGui::Begin(tr("Inspector", "Inspector"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::End();
@@ -1191,6 +1467,23 @@ void ProtoEditorApp::drawInspectorPanel() {
             }
         } else {
             ImGui::TextWrapped("%s", wideToUtf8(row[column]).c_str());
+            if (isEnumCandidateColumn(dataset, static_cast<int>(column))) {
+                const auto candidates = collectEnumCandidates(dataset, static_cast<int>(column));
+                if (!candidates.empty()) {
+                    std::string currentValue = wideToUtf8(row[column]);
+                    if (ImGui::BeginCombo(tr("Quick enum", "Hızlı enum"), currentValue.empty() ? tr("(empty)", "(boş)") : currentValue.c_str())) {
+                        for (const auto& candidate : candidates) {
+                            const std::string candidateUtf8 = wideToUtf8(candidate);
+                            const bool selected = row[column] == candidate;
+                            if (ImGui::Selectable(candidateUtf8.c_str(), selected)) {
+                                dataset.selectedColumn = static_cast<int>(column);
+                                setCellValue(dataset, sourceRow, static_cast<int>(column), candidate);
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+            }
             if (ImGui::Button(tr("Edit value", "Degeri duzenle"), ImVec2(-1.0f, 0.0f))) {
                 dataset.selectedColumn = static_cast<int>(column);
                 openCellEditor(dataset, sourceRow, static_cast<int>(column));
@@ -1256,8 +1549,23 @@ void ProtoEditorApp::drawEditCellModal() {
 
     const bool isIntegerColumn = columnType == L"int";
     const bool inputValid = !isIntegerColumn || isIntegerValue(utf8ToWide(editBuffer_));
+    const bool isEnumColumn = isEnumCandidateColumn(dataset, editColumn_);
+    const auto enumCandidates = isEnumColumn ? collectEnumCandidates(dataset, editColumn_) : std::vector<std::wstring>{};
     ImGui::Text(tr("Column: %s", "Kolon: %s"), label.c_str());
     ImGui::Text(tr("Type: %s", "Tur: %s"), wideToUtf8(columnType).c_str());
+    if (!enumCandidates.empty()) {
+        std::string currentValue = editBuffer_;
+        if (ImGui::BeginCombo(tr("Enum values", "Enum değerleri"), currentValue.empty() ? tr("(empty)", "(boş)") : currentValue.c_str())) {
+            for (const auto& candidate : enumCandidates) {
+                const std::string candidateUtf8 = wideToUtf8(candidate);
+                const bool selected = editBuffer_ == candidateUtf8;
+                if (ImGui::Selectable(candidateUtf8.c_str(), selected)) {
+                    editBuffer_ = candidateUtf8;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
     ImGui::InputTextMultiline("##editbuffer", &editBuffer_, ImVec2(620.0f, 220.0f));
 
     if (!inputValid) {
@@ -1623,6 +1931,10 @@ void ProtoEditorApp::drawValidationPanel() {
     }
     ImGui::SameLine();
     ImGui::Text(tr("Issues: %d", "Sorunlar: %d"), static_cast<int>(dataset.validationIssues.size()));
+    if (dataset.table.rowCount() > 1500) {
+        ImGui::TextWrapped("%s", tr("Large proto detected. Validation is refreshed on demand to keep loading and editing responsive.",
+            "Büyük proto algılandı. Yükleme ve düzenleme akışını akıcı tutmak için doğrulama isteğe bağlı yenilenir."));
+    }
     ImGui::Separator();
 
     for (const auto& issue : dataset.validationIssues) {
@@ -1759,7 +2071,7 @@ void ProtoEditorApp::drawComparePanel() {
         return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(500.0f, 320.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1180.0f, 720.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin(tr("Compare Panel", "Karsilastirma Paneli"), &showComparePanel_)) {
         ImGui::End();
         return;
@@ -1772,6 +2084,12 @@ void ProtoEditorApp::drawComparePanel() {
         if (!comparePath.empty() && dataset.compareTable.load(comparePath)) {
             dataset.compareLoaded = true;
             refreshCompare(dataset);
+            compareSelectedKey_.clear();
+            compareSelectedDetailColumn_ = -1;
+            compareSharedScrollX_ = 0.0f;
+            compareSharedScrollY_ = 0.0f;
+            compareScrollSource_ = -1;
+            compareRequestScrollToSelection_ = false;
             statusText_ = trs("Compare dataset loaded.", "Karsilastirma verisi yuklendi.");
         }
     }
@@ -1782,8 +2100,10 @@ void ProtoEditorApp::drawComparePanel() {
     ImGui::SameLine();
     ImGui::Checkbox(tr("Only changed rows", "Sadece degisen satirlar"), &dataset.compareOnlyChanged);
     if (ImGui::IsItemDeactivatedAfterEdit()) {
-        refreshCompare(dataset);
+        dataset.compareViewDirty = true;
     }
+    ImGui::SameLine();
+    ImGui::Checkbox(tr("Sync scroll", "Senkron scroll"), &compareSyncScroll_);
 
     if (!dataset.compareLoaded) {
         ImGui::TextUnformatted(tr("No compare proto loaded yet.", "Henuz karsilastirma protosu yuklenmedi."));
@@ -1791,53 +2111,527 @@ void ProtoEditorApp::drawComparePanel() {
         return;
     }
 
-    ImGui::Separator();
-    ImGui::Text(tr("Diff entries: %d", "Fark kayitlari: %d"), static_cast<int>(dataset.compareEntries.size()));
-
-    static int selectedCompareEntry = -1;
-    for (size_t i = 0; i < dataset.compareEntries.size(); ++i) {
-        const auto& entry = dataset.compareEntries[i];
-        std::string label = wideToUtf8(entry.key) + " | " + wideToUtf8(entry.type) + " | " +
-            std::to_string(entry.changedCells) + " " + tr("cells", "hucre");
-        if (ImGui::Selectable(label.c_str(), selectedCompareEntry == static_cast<int>(i))) {
-            selectedCompareEntry = static_cast<int>(i);
+    auto buildKeyIndex = [](const TsvFile& table) {
+        std::map<std::wstring, size_t> result;
+        for (size_t i = 0; i < table.rows().size(); ++i) {
+            if (!table.rows()[i].empty() && !table.rows()[i][0].empty()) {
+                result[table.rows()[i][0]] = i;
+            }
         }
+        return result;
+    };
+
+    struct CompareStats {
+        int rowCount = 0;
+        int columnCount = 0;
+        int emptyRows = 0;
+        int duplicateKeys = 0;
+    };
+
+    auto gatherStats = [](const TsvFile& table) {
+        CompareStats stats;
+        stats.rowCount = static_cast<int>(table.rowCount());
+        stats.columnCount = static_cast<int>(table.columnCount());
+        std::map<std::wstring, int> keys;
+        for (const auto& row : table.rows()) {
+            bool emptyRow = true;
+            for (const auto& cell : row) {
+                if (!cell.empty()) {
+                    emptyRow = false;
+                    break;
+                }
+            }
+            if (emptyRow) {
+                ++stats.emptyRows;
+            }
+            if (!row.empty() && !row[0].empty()) {
+                ++keys[row[0]];
+            }
+        }
+        for (const auto& [key, count] : keys) {
+            if (count > 1) {
+                ++stats.duplicateKeys;
+            }
+        }
+        return stats;
+    };
+
+    const CompareStats activeStats = gatherStats(dataset.table);
+    const CompareStats compareStats = gatherStats(dataset.compareTable);
+    const auto activeMap = buildKeyIndex(dataset.table);
+    const auto compareMap = buildKeyIndex(dataset.compareTable);
+    std::vector<std::wstring> diffKeys;
+    diffKeys.reserve(dataset.compareEntries.size());
+    for (const auto& entry : dataset.compareEntries) {
+        diffKeys.push_back(entry.key);
     }
 
-    if (selectedCompareEntry >= 0 && selectedCompareEntry < static_cast<int>(dataset.compareEntries.size())) {
-        const std::wstring key = dataset.compareEntries[static_cast<size_t>(selectedCompareEntry)].key;
-        if (ImGui::Button(tr("Merge compare row into active", "Karsilastirma satirini aktife birlestir"))) {
-            std::map<std::wstring, size_t> activeMap;
-            std::map<std::wstring, size_t> compareMap;
-            for (size_t i = 0; i < dataset.table.rows().size(); ++i) {
-                if (!dataset.table.rows()[i].empty()) {
-                    activeMap[dataset.table.rows()[i][0]] = i;
-                }
+    const auto resolveChangedCells = [&](const std::wstring& key) -> int {
+        for (const auto& entry : dataset.compareEntries) {
+            if (entry.key == key) {
+                return entry.changedCells;
             }
-            for (size_t i = 0; i < dataset.compareTable.rows().size(); ++i) {
-                if (!dataset.compareTable.rows()[i].empty()) {
-                    compareMap[dataset.compareTable.rows()[i][0]] = i;
-                }
-            }
+        }
+        return 0;
+    };
 
-            const auto compareIt = compareMap.find(key);
-            if (compareIt != compareMap.end()) {
-                const auto& compareRow = dataset.compareTable.rows()[compareIt->second];
-                const auto activeIt = activeMap.find(key);
-                if (activeIt == activeMap.end()) {
-                    dataset.table.rows().push_back(compareRow);
-                    dataset.modified = true;
-                } else {
-                    for (size_t column = 0; column < compareRow.size() && column < dataset.table.rows()[activeIt->second].size(); ++column) {
-                        if (dataset.table.rows()[activeIt->second][column] != compareRow[column]) {
-                            setCellValue(dataset, activeIt->second, static_cast<int>(column), compareRow[column]);
+    auto navigateDiff = [&](int direction) {
+        if (diffKeys.empty()) {
+            return;
+        }
+        int currentIndex = -1;
+        for (size_t i = 0; i < diffKeys.size(); ++i) {
+            if (diffKeys[i] == compareSelectedKey_) {
+                currentIndex = static_cast<int>(i);
+                break;
+            }
+        }
+        if (currentIndex < 0) {
+            currentIndex = direction > 0 ? -1 : static_cast<int>(diffKeys.size());
+        }
+        currentIndex += direction;
+        if (currentIndex < 0) {
+            currentIndex = static_cast<int>(diffKeys.size()) - 1;
+        }
+        if (currentIndex >= static_cast<int>(diffKeys.size())) {
+            currentIndex = 0;
+        }
+        compareSelectedKey_ = diffKeys[static_cast<size_t>(currentIndex)];
+        compareRequestScrollToSelection_ = true;
+    };
+
+    ImGui::Separator();
+    ImGui::Columns(2, "CompareTopStats", false);
+    ImGui::BeginChild("ActiveCompareStats", ImVec2(0.0f, 110.0f), true);
+    ImGui::TextUnformatted(tr("Active proto", "Aktif proto"));
+    ImGui::Separator();
+    ImGui::Text(tr("Rows: %d", "Satır: %d"), activeStats.rowCount);
+    ImGui::Text(tr("Columns: %d", "Kolon: %d"), activeStats.columnCount);
+    ImGui::Text(tr("Empty rows: %d", "Boş satır: %d"), activeStats.emptyRows);
+    ImGui::Text(tr("Duplicate keys: %d", "Tekrarlayan anahtar: %d"), activeStats.duplicateKeys);
+    ImGui::EndChild();
+    ImGui::NextColumn();
+    ImGui::BeginChild("CompareStats", ImVec2(0.0f, 110.0f), true);
+    ImGui::TextUnformatted(tr("Compare proto", "Karşılaştırma protosu"));
+    ImGui::Separator();
+    ImGui::Text(tr("Rows: %d", "Satır: %d"), compareStats.rowCount);
+    ImGui::Text(tr("Columns: %d", "Kolon: %d"), compareStats.columnCount);
+    ImGui::Text(tr("Empty rows: %d", "Boş satır: %d"), compareStats.emptyRows);
+    ImGui::Text(tr("Duplicate keys: %d", "Tekrarlayan anahtar: %d"), compareStats.duplicateKeys);
+    ImGui::EndChild();
+    ImGui::Columns(1);
+
+    ImGui::Separator();
+    ImGui::TextWrapped("%s", tr("Click a row on either side. Different rows and fields are highlighted, and both protos stay visible like the main grid.",
+        "Her iki tarafta da satıra tıklayabilirsiniz. Farklı satırlar ve alanlar vurgulanır; iki proto da ana grid gibi görünür kalır."));
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##compareprev", ImGuiDir_Left)) {
+        navigateDiff(-1);
+    }
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##comparenext", ImGuiDir_Right)) {
+        navigateDiff(1);
+    }
+    ImGui::SameLine();
+    ImGui::Text(tr("Diff rows: %d", "Farklı satır: %d"), static_cast<int>(diffKeys.size()));
+
+    std::string compareFilterLabel = tr("All columns", "Tüm kolonlar");
+    if (compareFilterColumn_ >= 0 && compareFilterColumn_ < static_cast<int>(dataset.table.header().size())) {
+        compareFilterLabel = wideToUtf8(dataset.table.header()[compareFilterColumn_]);
+    }
+    if (ImGui::BeginCombo(tr("Column diff filter", "Kolon fark filtresi"), compareFilterLabel.c_str())) {
+        if (ImGui::Selectable(tr("All columns", "Tüm kolonlar"), compareFilterColumn_ < 0)) {
+            compareFilterColumn_ = -1;
+            dataset.compareViewDirty = true;
+        }
+        for (size_t i = 0; i < dataset.table.header().size(); ++i) {
+            const bool selected = compareFilterColumn_ == static_cast<int>(i);
+            const std::string name = wideToUtf8(dataset.table.header()[i]);
+            if (ImGui::Selectable(name.c_str(), selected)) {
+                compareFilterColumn_ = static_cast<int>(i);
+                dataset.compareViewDirty = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Separator();
+
+    if (dataset.compareViewDirty) {
+        refreshCompareViewRows(dataset);
+    }
+
+    auto renderCompareGrid = [&](const char* childId,
+                                 const char* titleEn,
+                                 const char* titleTr,
+                                 bool isActiveGrid,
+                                 const TsvFile& table,
+                                 const std::vector<std::wstring>& visibleKeys,
+                                 const std::map<std::wstring, size_t>& selfMap,
+                                 const std::map<std::wstring, size_t>& otherMap) {
+        ImGui::BeginChild(childId, ImVec2(0.0f, 360.0f), true);
+        const int scrollSourceId = isActiveGrid ? 0 : 1;
+        if (compareSyncScroll_ && compareScrollSource_ != scrollSourceId) {
+            ImGui::SetScrollX(compareSharedScrollX_);
+            ImGui::SetScrollY(compareSharedScrollY_);
+        }
+        ImGui::TextUnformatted(tr(titleEn, titleTr));
+        ImGui::Separator();
+
+        if (ImGui::BeginTable(childId, static_cast<int>(table.columnCount()), ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
+            ImGui::TableSetupScrollFreeze(1, 1);
+            for (size_t column = 0; column < table.header().size(); ++column) {
+                ImGui::TableSetupColumn(wideToUtf8(table.header()[column]).c_str(), ImGuiTableColumnFlags_WidthFixed, 140.0f);
+            }
+            ImGui::TableHeadersRow();
+
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(visibleKeys.size()));
+            while (clipper.Step()) {
+                for (int visibleIndex = clipper.DisplayStart; visibleIndex < clipper.DisplayEnd; ++visibleIndex) {
+                    const std::wstring& key = visibleKeys[static_cast<size_t>(visibleIndex)];
+                    const auto selfIt = selfMap.find(key);
+                    const auto otherIt = otherMap.find(key);
+                    const std::vector<std::wstring>* row = selfIt != selfMap.end() ? &table.rows()[selfIt->second] : nullptr;
+                    const bool existsOther = otherIt != otherMap.end();
+                    const int changedCells = row != nullptr ? (existsOther ? resolveChangedCells(key) : static_cast<int>(row->size())) : 0;
+                    const bool rowDifferent = !existsOther || changedCells > 0;
+
+                    ImGui::TableNextRow();
+                    if (rowDifferent) {
+                        const ImU32 rowColor = existsOther ? IM_COL32(140, 100, 35, 60) : IM_COL32(120, 35, 35, 70);
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, rowColor);
+                    }
+
+                    for (size_t column = 0; column < table.columnCount(); ++column) {
+                        ImGui::TableSetColumnIndex(static_cast<int>(column));
+                        const std::wstring value = (row != nullptr && column < row->size()) ? (*row)[column] : L"";
+                        const bool selected = !compareSelectedKey_.empty() && key == compareSelectedKey_;
+
+                        if (column == 0) {
+                            if (ImGui::Selectable(wideToUtf8(value.empty() ? trw(L"(empty)", L"(boş)") : value).c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                                compareSelectedKey_ = key;
+                                compareSelectedDetailColumn_ = -1;
+                                compareRequestScrollToSelection_ = false;
+                            }
+                            if (selected && compareRequestScrollToSelection_) {
+                                ImGui::SetScrollHereY(0.35f);
+                            }
+                        } else {
+                            if (existsOther && key != L"") {
+                                if (otherIt != otherMap.end()) {
+                                    const auto& otherRow = isActiveGrid ? dataset.compareTable.rows()[otherIt->second] : dataset.table.rows()[otherIt->second];
+                                    if ((row == nullptr && column < otherRow.size() && !otherRow[column].empty()) ||
+                                        (row != nullptr && column < otherRow.size() && otherRow[column] != value)) {
+                                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.35f, 1.0f));
+                                        ImGui::TextWrapped("%s", wideToUtf8(value).c_str());
+                                        ImGui::PopStyleColor();
+                                    } else {
+                                        ImGui::TextWrapped("%s", wideToUtf8(value).c_str());
+                                    }
+                                } else {
+                                    ImGui::TextWrapped("%s", wideToUtf8(value).c_str());
+                                }
+                            } else {
+                                ImGui::TextWrapped("%s", wideToUtf8(value).c_str());
+                            }
                         }
                     }
                 }
-                rebuildFilteredRows(dataset);
-                refreshCompare(dataset);
             }
+
+            ImGui::EndTable();
         }
+        if (compareSyncScroll_ && ImGui::IsWindowHovered() &&
+            ((std::fabs(ImGui::GetIO().MouseWheel) > 0.0f) ||
+             (ImGui::IsMouseDown(ImGuiMouseButton_Left) && (std::fabs(ImGui::GetIO().MouseDelta.x) > 0.0f || std::fabs(ImGui::GetIO().MouseDelta.y) > 0.0f)))) {
+            compareScrollSource_ = scrollSourceId;
+            compareSharedScrollX_ = ImGui::GetScrollX();
+            compareSharedScrollY_ = ImGui::GetScrollY();
+        }
+        ImGui::EndChild();
+    };
+
+    ImGui::Columns(2, "CompareBody", true);
+    renderCompareGrid("ActiveCompareGrid", "Active proto grid", "Aktif proto grid", true, dataset.table, dataset.compareVisibleKeys, activeMap, compareMap);
+    ImGui::NextColumn();
+    renderCompareGrid("CompareProtoGrid", "Compare proto grid", "Karşılaştırma proto grid", false, dataset.compareTable, dataset.compareVisibleKeys, compareMap, activeMap);
+    ImGui::Columns(1);
+    compareRequestScrollToSelection_ = false;
+
+    ImGui::Separator();
+    ImGui::BeginChild("CompareDetailView", ImVec2(0.0f, 230.0f), true);
+    if (compareSelectedKey_.empty()) {
+        ImGui::TextUnformatted(tr("Select a row from either grid to inspect detailed row/column differences.",
+            "Detaylı satır ve kolon farklarını görmek için iki gridden bir satır seçin."));
+        ImGui::EndChild();
+        ImGui::End();
+        return;
+    }
+
+    const std::wstring& key = compareSelectedKey_;
+    const auto activeIt = activeMap.find(key);
+    const auto compareIt = compareMap.find(key);
+    const std::vector<std::wstring>* activeRow = activeIt != activeMap.end() ? &dataset.table.rows()[activeIt->second] : nullptr;
+    const std::vector<std::wstring>* compareRow = compareIt != compareMap.end() ? &dataset.compareTable.rows()[compareIt->second] : nullptr;
+    const std::wstring selectedState =
+        activeRow != nullptr && compareRow != nullptr ? (resolveChangedCells(key) > 0 ? trw(L"Changed", L"Degismis") : trw(L"Same", L"Aynı")) :
+        (activeRow != nullptr ? trw(L"Only in active", L"Sadece aktifte") : trw(L"Only in compare", L"Sadece karsilastirmada"));
+
+    ImGui::Text(tr("Selected key: %s", "Seçili anahtar: %s"), wideToUtf8(key).c_str());
+    ImGui::Text(tr("State: %s", "Durum: %s"), wideToUtf8(selectedState).c_str());
+    ImGui::Separator();
+
+    if (ImGui::Button(tr("Merge right to left", "Sağı sola aktar"), ImVec2(180.0f, 0.0f)) && compareRow != nullptr) {
+        transferCompareRowByHeader(dataset, key, true);
+        rebuildFilteredRows(dataset);
+        dataset.compareViewDirty = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Merge left to right", "Solu sağa aktar"), ImVec2(180.0f, 0.0f)) && activeRow != nullptr) {
+        transferCompareRowByHeader(dataset, key, false);
+        dataset.compareViewDirty = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Focus active row", "Aktif satıra git"), ImVec2(180.0f, 0.0f)) && activeIt != activeMap.end()) {
+        auto filteredIt = std::find(dataset.filteredRows.begin(), dataset.filteredRows.end(), activeIt->second);
+        if (filteredIt != dataset.filteredRows.end()) {
+            dataset.selectedRow = static_cast<int>(std::distance(dataset.filteredRows.begin(), filteredIt));
+            dataset.selectedColumn = 0;
+            requestScrollToSelection_ = true;
+        }
+    }
+
+    const size_t detailColumnCount = (std::max)(
+        activeRow != nullptr ? activeRow->size() : static_cast<size_t>(0),
+        compareRow != nullptr ? compareRow->size() : static_cast<size_t>(0));
+    const size_t headerCount = (std::max)(dataset.table.header().size(), dataset.compareTable.header().size());
+    const size_t renderColumnCount = (std::max)(detailColumnCount, headerCount);
+
+    ImGui::Separator();
+    if (ImGui::BeginTable("CompareDetailTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0.0f, 180.0f))) {
+        ImGui::TableSetupColumn(tr("Column", "Kolon"));
+        ImGui::TableSetupColumn(tr("Active", "Aktif"));
+        ImGui::TableSetupColumn(tr("Compare", "Karşılaştırma"));
+        ImGui::TableSetupColumn(tr("Left", "Sol"), ImGuiTableColumnFlags_WidthFixed, 84.0f);
+        ImGui::TableSetupColumn(tr("Right", "Sağ"), ImGuiTableColumnFlags_WidthFixed, 84.0f);
+        ImGui::TableHeadersRow();
+
+        for (size_t column = 0; column < renderColumnCount; ++column) {
+            if (compareFilterColumn_ >= 0 && static_cast<int>(column) != compareFilterColumn_) {
+                continue;
+            }
+            const std::wstring header =
+                column < dataset.table.header().size() ? dataset.table.header()[column] :
+                (column < dataset.compareTable.header().size() ? dataset.compareTable.header()[column] : trw(L"(unnamed)", L"(isimsiz)"));
+
+            const std::wstring activeValue = (activeRow != nullptr && column < activeRow->size()) ? (*activeRow)[column] : L"";
+            const std::wstring compareValue = (compareRow != nullptr && column < compareRow->size()) ? (*compareRow)[column] : L"";
+            const bool different = activeValue != compareValue;
+
+            ImGui::TableNextRow();
+            if (different) {
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(140, 90, 30, 70));
+            }
+
+            ImGui::TableSetColumnIndex(0);
+            const std::string headerUtf8 = wideToUtf8(header);
+            if (ImGui::Selectable(headerUtf8.c_str(), compareSelectedDetailColumn_ == static_cast<int>(column), ImGuiSelectableFlags_SpanAllColumns)) {
+                compareSelectedDetailColumn_ = static_cast<int>(column);
+            }
+
+            ImGui::TableSetColumnIndex(1);
+            if (different) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.87f, 1.0f, 1.0f));
+            }
+            ImGui::TextWrapped("%s", wideToUtf8(activeValue).c_str());
+            if (different) {
+                ImGui::PopStyleColor();
+            }
+
+            ImGui::TableSetColumnIndex(2);
+            if (different) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.35f, 1.0f));
+            }
+            ImGui::TextWrapped("%s", wideToUtf8(compareValue).c_str());
+            if (different) {
+                ImGui::PopStyleColor();
+            }
+
+            ImGui::TableSetColumnIndex(3);
+            ImGui::PushID(static_cast<int>(column));
+            if (different && compareRow != nullptr && activeIt != activeMap.end() &&
+                column < dataset.table.rows()[activeIt->second].size() && column < compareRow->size()) {
+                if (ImGui::SmallButton(tr("<- Copy", "← Aktar"))) {
+                    transferCompareCellByHeader(dataset, key, header, true);
+                    dataset.compareViewDirty = true;
+                }
+            } else {
+                ImGui::TextUnformatted("-");
+            }
+            ImGui::TableSetColumnIndex(4);
+            if (different && activeRow != nullptr && compareIt != compareMap.end() &&
+                column < dataset.compareTable.rows()[compareIt->second].size() && column < activeRow->size()) {
+                if (ImGui::SmallButton(tr("Copy ->", "Aktar →"))) {
+                    transferCompareCellByHeader(dataset, key, header, false);
+                    dataset.compareViewDirty = true;
+                }
+            } else {
+                ImGui::TextUnformatted("-");
+            }
+            ImGui::PopID();
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+    if (activeRow == nullptr || compareRow == nullptr) {
+        ImGui::TextWrapped("%s", tr("This key exists only on one side. Full-row merge is available above.",
+            "Bu anahtar yalnızca tek tarafta mevcut. Tam satır aktarımı için üstteki butonu kullanabilirsiniz."));
+    } else {
+        ImGui::TextWrapped("%s", tr("Different fields are highlighted. Applying a field or full row preserves TSV column layout and save format.",
+            "Farklı alanlar vurgulanır. Alan veya tam satır aktarımı TSV kolon düzenini ve kaydetme formatını korur."));
+    }
+    ImGui::EndChild();
+
+    ImGui::End();
+}
+
+void ProtoEditorApp::drawVnumToolsPanel() {
+    DatasetState& dataset = activeDataset();
+    if (!dataset.loaded) {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(420.0f, 260.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(tr("VNUM Tools", "VNUM Araçları"), &showVnumToolsPanel_)) {
+        ImGui::End();
+        return;
+    }
+
+    const long long nextVnum = findNextAvailableVnum(dataset);
+    const int targetCount = vnumVisibleRowsOnly_ ? static_cast<int>(dataset.filteredRows.size()) : static_cast<int>(dataset.table.rowCount());
+    const long long suggestedBlockStart = findSuggestedVnumBlockStart(dataset, (std::max)(targetCount, 1));
+
+    ImGui::Text(tr("Next available VNUM: %lld", "Sonraki uygun VNUM: %lld"), nextVnum);
+    ImGui::Text(tr("Suggested free block start: %lld", "Önerilen boş blok başlangıcı: %lld"), suggestedBlockStart);
+
+    if (vnumStartBuffer_.empty()) {
+        vnumStartBuffer_ = std::to_string(suggestedBlockStart);
+    }
+
+    ImGui::Separator();
+    ImGui::Checkbox(tr("Apply to visible rows only", "Sadece görünür satırlara uygula"), &vnumVisibleRowsOnly_);
+    ImGui::InputTextWithHint(tr("Start VNUM", "Başlangıç VNUM"), "10000", &vnumStartBuffer_);
+    ImGui::InputTextWithHint(tr("Step", "Artış"), "1", &vnumStepBuffer_);
+
+    if (ImGui::Button(tr("Fill selected rows sequentially", "Seçili satırlara ardışık ata"), ImVec2(-1.0f, 0.0f))) {
+        const std::wstring startWide = utf8ToWide(vnumStartBuffer_);
+        const std::wstring stepWide = utf8ToWide(vnumStepBuffer_);
+        if (isIntegerValue(startWide) && isIntegerValue(stepWide)) {
+            const long long startValue = vnumStartBuffer_.empty() ? suggestedBlockStart : std::stoll(vnumStartBuffer_);
+            const long long step = vnumStepBuffer_.empty() ? 1 : std::stoll(vnumStepBuffer_);
+            assignSequentialVnums(dataset, startValue, step, vnumVisibleRowsOnly_);
+        } else {
+            statusText_ = trs("Invalid VNUM tool input.", "Geçersiz VNUM araç girdisi.");
+        }
+    }
+
+    if (ImGui::Button(tr("Use next free VNUM as start", "Sonraki boş VNUM'u başlangıç yap"), ImVec2(-1.0f, 0.0f))) {
+        vnumStartBuffer_ = std::to_string(nextVnum);
+    }
+
+    ImGui::End();
+}
+
+void ProtoEditorApp::drawSnapshotManagerPanel() {
+    DatasetState& dataset = activeDataset();
+    if (!dataset.loaded) {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(480.0f, 320.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(tr("Snapshot Manager", "Snapshot Yöneticisi"), &showSnapshotManagerPanel_)) {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::Button(tr("Refresh snapshots", "Snapshotları yenile"))) {
+        refreshSnapshots(dataset);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Create snapshot now", "Şimdi snapshot oluştur"))) {
+        createSnapshot(dataset);
+    }
+    ImGui::Separator();
+
+    ImGui::TextWrapped(tr("Current file: %s", "Geçerli dosya: %s"), dataset.filePath.empty() ? "-" : wideToUtf8(dataset.filePath).c_str());
+    ImGui::Text(tr("Snapshot count: %d", "Snapshot sayısı: %d"), static_cast<int>(dataset.snapshots.size()));
+
+    for (size_t i = 0; i < dataset.snapshots.size(); ++i) {
+        const auto& snapshot = dataset.snapshots[i];
+        if (ImGui::Selectable(wideToUtf8(snapshot.timestamp).c_str(), selectedSnapshotIndex_ == static_cast<int>(i))) {
+            selectedSnapshotIndex_ = static_cast<int>(i);
+        }
+    }
+
+    if (selectedSnapshotIndex_ >= 0 && selectedSnapshotIndex_ < static_cast<int>(dataset.snapshots.size())) {
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", wideToUtf8(dataset.snapshots[static_cast<size_t>(selectedSnapshotIndex_)].path).c_str());
+        if (ImGui::Button(tr("Restore selected snapshot", "Seçili snapshot'ı geri yükle"), ImVec2(-1.0f, 0.0f))) {
+            restoreSnapshot(dataset, dataset.snapshots[static_cast<size_t>(selectedSnapshotIndex_)].path);
+        }
+    }
+
+    ImGui::End();
+}
+
+void ProtoEditorApp::drawDependencyPanel() {
+    DatasetState& dataset = activeDataset();
+    if (!dataset.loaded) {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(500.0f, 320.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(tr("Dependency Checker", "Bağımlılık Denetleyici"), &showDependencyPanel_)) {
+        ImGui::End();
+        return;
+    }
+
+    if (dataset.selectedRow < 0 || dataset.selectedRow >= static_cast<int>(dataset.filteredRows.size())) {
+        ImGui::TextUnformatted(tr("Select a row first.", "Önce bir satır seçin."));
+        ImGui::End();
+        return;
+    }
+
+    const size_t sourceRow = dataset.filteredRows[dataset.selectedRow];
+    const std::wstring key = dataset.table.rows()[sourceRow].empty() ? L"" : dataset.table.rows()[sourceRow][0];
+    ImGui::Text(tr("Selected VNUM: %s", "Seçili VNUM: %s"), key.empty() ? "-" : wideToUtf8(key).c_str());
+
+    if (ImGui::Button(tr("Scan dependencies", "Bağımlılıkları tara"))) {
+        refreshDependencies(dataset);
+    }
+    ImGui::SameLine();
+    ImGui::Text(tr("Entries: %d", "Kayıt: %d"), static_cast<int>(dataset.dependencyEntries.size()));
+    ImGui::Separator();
+
+    if (!dataset.dependenciesScanned) {
+        ImGui::TextUnformatted(tr("Run a scan to inspect linked names, compare data and text references near the proto file.",
+            "Proto dosyası çevresindeki bağlı names, compare verisi ve metin referanslarını görmek için tarama başlatın."));
+        ImGui::End();
+        return;
+    }
+
+    for (const auto& entry : dataset.dependencyEntries) {
+        std::string label = wideToUtf8(entry.source);
+        if (!entry.detail.empty()) {
+            label += " | " + wideToUtf8(entry.detail);
+        }
+        ImGui::BulletText("%s", label.c_str());
+    }
+
+    if (dataset.dependencyEntries.empty()) {
+        ImGui::TextUnformatted(tr("No dependency entry found.", "Bağımlılık kaydı bulunamadı."));
     }
 
     ImGui::End();
@@ -2216,11 +3010,13 @@ void ProtoEditorApp::refreshValidation(DatasetState& dataset) {
                 break;
             }
         }
+
     }
 }
 
 void ProtoEditorApp::refreshSnapshots(DatasetState& dataset) {
     dataset.snapshots.clear();
+    selectedSnapshotIndex_ = -1;
     if (dataset.filePath.empty()) {
         return;
     }
@@ -2350,6 +3146,8 @@ bool ProtoEditorApp::exportSql(const DatasetState& dataset, const std::wstring& 
 void ProtoEditorApp::refreshCompare(DatasetState& dataset) {
     dataset.compareEntries.clear();
     if (!dataset.loaded || !dataset.compareLoaded) {
+        dataset.compareVisibleKeys.clear();
+        dataset.compareViewDirty = true;
         return;
     }
 
@@ -2390,6 +3188,235 @@ void ProtoEditorApp::refreshCompare(DatasetState& dataset) {
             dataset.compareEntries.push_back({ key, trw(L"Only in compare", L"Sadece karsilastirmada"), static_cast<int>(row.size()) });
         }
     }
+    dataset.compareViewDirty = true;
+}
+
+void ProtoEditorApp::refreshCompareViewRows(DatasetState& dataset) {
+    dataset.compareVisibleKeys.clear();
+    if (!dataset.loaded || !dataset.compareLoaded) {
+        dataset.compareViewDirty = false;
+        return;
+    }
+
+    auto buildKeyIndex = [](const TsvFile& table) {
+        std::map<std::wstring, size_t> result;
+        for (size_t i = 0; i < table.rows().size(); ++i) {
+            if (!table.rows()[i].empty() && !table.rows()[i][0].empty()) {
+                result[table.rows()[i][0]] = i;
+            }
+        }
+        return result;
+    };
+
+    auto resolveChangedCells = [&](const std::wstring& key) -> int {
+        for (const auto& entry : dataset.compareEntries) {
+            if (entry.key == key) {
+                return entry.changedCells;
+            }
+        }
+        return 0;
+    };
+
+    const auto activeMap = buildKeyIndex(dataset.table);
+    const auto compareMap = buildKeyIndex(dataset.compareTable);
+
+    auto rowMatchesFilter = [&](const std::vector<std::wstring>& row, const std::vector<std::wstring>* otherRow) -> bool {
+        if (compareFilterColumn_ < 0) {
+            return true;
+        }
+        const size_t column = static_cast<size_t>(compareFilterColumn_);
+        const std::wstring leftValue = column < row.size() ? row[column] : L"";
+        const std::wstring rightValue = (otherRow != nullptr && column < otherRow->size()) ? (*otherRow)[column] : L"";
+        if (otherRow == nullptr) {
+            return true;
+        }
+        return leftValue != rightValue;
+    };
+
+    std::set<std::wstring> seen;
+    for (const auto& row : dataset.table.rows()) {
+        const std::wstring key = !row.empty() ? row[0] : L"";
+        if (key.empty() || seen.find(key) != seen.end()) {
+            continue;
+        }
+        const auto otherIt = compareMap.find(key);
+        const std::vector<std::wstring>* otherRow = otherIt != compareMap.end() ? &dataset.compareTable.rows()[otherIt->second] : nullptr;
+        const bool rowDifferent = otherRow == nullptr || resolveChangedCells(key) > 0;
+        if (dataset.compareOnlyChanged && !rowDifferent) {
+            continue;
+        }
+        if (!rowMatchesFilter(row, otherRow)) {
+            continue;
+        }
+        dataset.compareVisibleKeys.push_back(key);
+        seen.insert(key);
+    }
+
+    for (const auto& row : dataset.compareTable.rows()) {
+        const std::wstring key = !row.empty() ? row[0] : L"";
+        if (key.empty() || seen.find(key) != seen.end()) {
+            continue;
+        }
+        const auto otherIt = activeMap.find(key);
+        const std::vector<std::wstring>* otherRow = otherIt != activeMap.end() ? &dataset.table.rows()[otherIt->second] : nullptr;
+        const bool rowDifferent = otherRow == nullptr || resolveChangedCells(key) > 0;
+        if (dataset.compareOnlyChanged && !rowDifferent) {
+            continue;
+        }
+        if (!rowMatchesFilter(row, otherRow)) {
+            continue;
+        }
+        dataset.compareVisibleKeys.push_back(key);
+        seen.insert(key);
+    }
+
+    dataset.compareViewDirty = false;
+}
+
+int ProtoEditorApp::findColumnIndexByHeader(const std::vector<std::wstring>& headers, const std::wstring& name) const {
+    for (size_t i = 0; i < headers.size(); ++i) {
+        if (headers[i] == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+void ProtoEditorApp::transferCompareRowByHeader(DatasetState& dataset, const std::wstring& key, bool compareToActive) {
+    if (!dataset.loaded || !dataset.compareLoaded || key.empty()) {
+        return;
+    }
+
+    auto buildKeyIndex = [](const TsvFile& table) {
+        std::map<std::wstring, size_t> result;
+        for (size_t i = 0; i < table.rows().size(); ++i) {
+            if (!table.rows()[i].empty() && !table.rows()[i][0].empty()) {
+                result[table.rows()[i][0]] = i;
+            }
+        }
+        return result;
+    };
+
+    auto activeMap = buildKeyIndex(dataset.table);
+    auto compareMap = buildKeyIndex(dataset.compareTable);
+    auto activeIt = activeMap.find(key);
+    auto compareIt = compareMap.find(key);
+    if (compareToActive && compareIt == compareMap.end()) {
+        return;
+    }
+    if (!compareToActive && activeIt == activeMap.end()) {
+        return;
+    }
+
+    TsvFile& targetTable = compareToActive ? dataset.table : dataset.compareTable;
+    const TsvFile& sourceTable = compareToActive ? dataset.compareTable : dataset.table;
+    const size_t sourceRowIndex = compareToActive ? compareIt->second : activeIt->second;
+
+    size_t targetRowIndex = 0;
+    bool targetExists = false;
+    if (compareToActive) {
+        if (activeIt != activeMap.end()) {
+            targetRowIndex = activeIt->second;
+            targetExists = true;
+        }
+    } else {
+        if (compareIt != compareMap.end()) {
+            targetRowIndex = compareIt->second;
+            targetExists = true;
+        }
+    }
+
+    if (!targetExists) {
+        std::vector<std::wstring> newRow(targetTable.columnCount(), L"");
+        const auto& sourceRow = sourceTable.rows()[sourceRowIndex];
+        for (size_t sourceColumn = 0; sourceColumn < sourceTable.header().size() && sourceColumn < sourceRow.size(); ++sourceColumn) {
+            const int targetColumn = findColumnIndexByHeader(targetTable.header(), sourceTable.header()[sourceColumn]);
+            if (targetColumn >= 0) {
+                newRow[static_cast<size_t>(targetColumn)] = sourceRow[sourceColumn];
+            }
+        }
+        targetTable.rows().push_back(std::move(newRow));
+        if (compareToActive) {
+            dataset.modified = true;
+        }
+    } else {
+        const auto& sourceRow = sourceTable.rows()[sourceRowIndex];
+        for (size_t sourceColumn = 0; sourceColumn < sourceTable.header().size() && sourceColumn < sourceRow.size(); ++sourceColumn) {
+            const int targetColumn = findColumnIndexByHeader(targetTable.header(), sourceTable.header()[sourceColumn]);
+            if (targetColumn < 0 || static_cast<size_t>(targetColumn) >= targetTable.rows()[targetRowIndex].size()) {
+                continue;
+            }
+            if (compareToActive) {
+                if (dataset.table.rows()[targetRowIndex][static_cast<size_t>(targetColumn)] != sourceRow[sourceColumn]) {
+                    setCellValue(dataset, targetRowIndex, targetColumn, sourceRow[sourceColumn]);
+                }
+            } else {
+                dataset.compareTable.rows()[targetRowIndex][static_cast<size_t>(targetColumn)] = sourceRow[sourceColumn];
+            }
+        }
+    }
+
+    if (!compareToActive) {
+        statusText_ = trs("Left row copied to compare side.", "Sol satır sağ compare tarafına aktarıldı.");
+    } else {
+        statusText_ = trs("Right row copied to active side.", "Sağ satır sol aktif tarafa aktarıldı.");
+    }
+    refreshCompare(dataset);
+}
+
+void ProtoEditorApp::transferCompareCellByHeader(DatasetState& dataset, const std::wstring& key, const std::wstring& columnName, bool compareToActive) {
+    if (!dataset.loaded || !dataset.compareLoaded || key.empty() || columnName.empty()) {
+        return;
+    }
+
+    auto buildKeyIndex = [](const TsvFile& table) {
+        std::map<std::wstring, size_t> result;
+        for (size_t i = 0; i < table.rows().size(); ++i) {
+            if (!table.rows()[i].empty() && !table.rows()[i][0].empty()) {
+                result[table.rows()[i][0]] = i;
+            }
+        }
+        return result;
+    };
+
+    auto activeMap = buildKeyIndex(dataset.table);
+    auto compareMap = buildKeyIndex(dataset.compareTable);
+    auto activeIt = activeMap.find(key);
+    auto compareIt = compareMap.find(key);
+    if (compareToActive && (compareIt == compareMap.end() || activeIt == activeMap.end())) {
+        return;
+    }
+    if (!compareToActive && (activeIt == activeMap.end() || compareIt == compareMap.end())) {
+        return;
+    }
+
+    if (compareToActive) {
+        const int sourceColumn = findColumnIndexByHeader(dataset.compareTable.header(), columnName);
+        const int targetColumn = findColumnIndexByHeader(dataset.table.header(), columnName);
+        if (sourceColumn < 0 || targetColumn < 0) {
+            return;
+        }
+        if (static_cast<size_t>(sourceColumn) >= dataset.compareTable.rows()[compareIt->second].size() ||
+            static_cast<size_t>(targetColumn) >= dataset.table.rows()[activeIt->second].size()) {
+            return;
+        }
+        setCellValue(dataset, activeIt->second, targetColumn, dataset.compareTable.rows()[compareIt->second][sourceColumn]);
+        statusText_ = trs("Field copied right to left.", "Alan sağdan sola aktarıldı.");
+    } else {
+        const int sourceColumn = findColumnIndexByHeader(dataset.table.header(), columnName);
+        const int targetColumn = findColumnIndexByHeader(dataset.compareTable.header(), columnName);
+        if (sourceColumn < 0 || targetColumn < 0) {
+            return;
+        }
+        if (static_cast<size_t>(sourceColumn) >= dataset.table.rows()[activeIt->second].size() ||
+            static_cast<size_t>(targetColumn) >= dataset.compareTable.rows()[compareIt->second].size()) {
+            return;
+        }
+        dataset.compareTable.rows()[compareIt->second][targetColumn] = dataset.table.rows()[activeIt->second][sourceColumn];
+        statusText_ = trs("Field copied left to right.", "Alan soldan sağa aktarıldı.");
+    }
+
+    refreshCompare(dataset);
 }
 
 void ProtoEditorApp::refreshSearchMatches(DatasetState& dataset) {
@@ -2646,7 +3673,9 @@ void ProtoEditorApp::rebuildFilteredRows(DatasetState& dataset) {
     }
 
     refreshSearchMatches(dataset);
-    refreshValidation(dataset);
+    if (showValidationPanel_ || dataset.table.rowCount() <= 1500) {
+        refreshValidation(dataset);
+    }
     refreshCompare(dataset);
 }
 
@@ -2705,7 +3734,9 @@ void ProtoEditorApp::loadDataset(DatasetKind kind, const std::wstring& explicitP
     dataset.sortAscending = true;
     dataset.undoStack.clear();
     dataset.redoStack.clear();
+    dataset.nextChangeGroupId = 1;
     dataset.gotoRowBuffer.clear();
+    dataset.selectEntireColumn = false;
     dataset.validationIssues.clear();
     dataset.snapshots.clear();
     dataset.compareEntries.clear();
@@ -2719,12 +3750,22 @@ void ProtoEditorApp::loadDataset(DatasetKind kind, const std::wstring& explicitP
     dataset.advancedFilterValue.clear();
     dataset.compareLoaded = false;
     dataset.compareTable.clear();
+    dataset.compareVisibleKeys.clear();
+    dataset.compareViewDirty = true;
     dataset.namesLoaded = false;
     dataset.namesPath.clear();
     dataset.namesTable.clear();
     dataset.linkedEditing = false;
     dataset.changedRowsOnlyExport = false;
     dataset.workspacePreset = "default";
+    dataset.blockSelectionActive = false;
+    dataset.blockStartRow = -1;
+    dataset.blockStartColumn = -1;
+    dataset.blockEndRow = -1;
+    dataset.blockEndColumn = -1;
+    dataset.dependencyEntries.clear();
+    dataset.dependenciesScanned = false;
+    selectedSnapshotIndex_ = -1;
 
     dataset.configPath = findConfigPath(kind);
     if (!dataset.table.load(path)) {
@@ -2809,11 +3850,14 @@ void ProtoEditorApp::setCellValue(DatasetState& dataset, size_t sourceRow, int c
     change.column = column;
     change.before = current;
     change.after = value;
+    change.groupId = dataset.nextChangeGroupId++;
     dataset.undoStack.push_back(change);
     dataset.redoStack.clear();
 
     current = value;
     markModified(dataset, sourceRow, column);
+    dataset.dependenciesScanned = false;
+    dataset.dependencyEntries.clear();
     rebuildFilteredRows(dataset);
 
     if (dataset.linkedEditing && dataset.namesLoaded && column == 0) {
@@ -2843,7 +3887,8 @@ void ProtoEditorApp::applyCellChange(DatasetState& dataset, const DatasetState::
     }
 
     markModified(dataset, change.row, change.column);
-    rebuildFilteredRows(dataset);
+    dataset.dependenciesScanned = false;
+    dataset.dependencyEntries.clear();
 }
 
 void ProtoEditorApp::openCellEditor(DatasetState& dataset, size_t sourceRow, int column) {
@@ -2968,10 +4013,15 @@ void ProtoEditorApp::undo(DatasetState& dataset) {
         return;
     }
 
-    const DatasetState::CellChange change = dataset.undoStack.back();
-    dataset.undoStack.pop_back();
-    dataset.redoStack.push_back(change);
-    applyCellChange(dataset, change, false, false);
+    const int groupId = dataset.undoStack.back().groupId;
+    do {
+        const DatasetState::CellChange change = dataset.undoStack.back();
+        dataset.undoStack.pop_back();
+        dataset.redoStack.push_back(change);
+        applyCellChange(dataset, change, false, false);
+    } while (!dataset.undoStack.empty() && dataset.undoStack.back().groupId == groupId);
+
+    rebuildFilteredRows(dataset);
     statusText_ = trs("Undo applied.", "Geri alma uygulandi.");
 }
 
@@ -2980,10 +4030,15 @@ void ProtoEditorApp::redo(DatasetState& dataset) {
         return;
     }
 
-    const DatasetState::CellChange change = dataset.redoStack.back();
-    dataset.redoStack.pop_back();
-    dataset.undoStack.push_back(change);
-    applyCellChange(dataset, change, true, false);
+    const int groupId = dataset.redoStack.back().groupId;
+    do {
+        const DatasetState::CellChange change = dataset.redoStack.back();
+        dataset.redoStack.pop_back();
+        dataset.undoStack.push_back(change);
+        applyCellChange(dataset, change, true, false);
+    } while (!dataset.redoStack.empty() && dataset.redoStack.back().groupId == groupId);
+
+    rebuildFilteredRows(dataset);
     statusText_ = trs("Redo applied.", "Yineleme uygulandi.");
 }
 
@@ -3266,6 +4321,632 @@ void ProtoEditorApp::bulkReplaceColumnValue(DatasetState& dataset, int columnInd
     statusText_ = trs("Bulk replace applied to ", "Toplu degistirme uygulandi: ") + std::to_string(changedCount) + trs(" cells.", " hucre.");
 }
 
+void ProtoEditorApp::selectCurrentColumn(DatasetState& dataset) {
+    if (!dataset.loaded || dataset.selectedColumn < 0 || dataset.selectedColumn >= static_cast<int>(dataset.table.columnCount())) {
+        return;
+    }
+
+    dataset.selectEntireColumn = true;
+    if (dataset.selectedRow < 0 && !dataset.filteredRows.empty()) {
+        dataset.selectedRow = 0;
+    }
+    statusText_ = trs("Current column selected.", "Mevcut kolon secildi.");
+}
+
+void ProtoEditorApp::copySelectedColumnToClipboard(const DatasetState& dataset) const {
+    if (!dataset.loaded || dataset.selectedColumn < 0 || dataset.selectedColumn >= static_cast<int>(dataset.table.columnCount())) {
+        return;
+    }
+
+    std::wstring clipboardText;
+    const size_t startIndex = (dataset.selectEntireColumn || dataset.selectedRow < 0) ? 0 : static_cast<size_t>(dataset.selectedRow);
+    for (size_t filteredIndex = startIndex; filteredIndex < dataset.filteredRows.size(); ++filteredIndex) {
+        const size_t sourceRow = dataset.filteredRows[filteredIndex];
+        const auto& row = dataset.table.rows()[sourceRow];
+        if (dataset.selectedColumn < static_cast<int>(row.size())) {
+            clipboardText += row[dataset.selectedColumn];
+        }
+        if (filteredIndex + 1 < dataset.filteredRows.size()) {
+            clipboardText += L"\r\n";
+        }
+    }
+
+    setClipboardUnicodeText(hwnd_, clipboardText);
+}
+
+void ProtoEditorApp::pasteClipboardIntoSelectedColumn(DatasetState& dataset) {
+    if (!dataset.loaded || dataset.selectedColumn < 0 || dataset.selectedColumn >= static_cast<int>(dataset.table.columnCount())) {
+        return;
+    }
+
+    const std::wstring clipboardText = getClipboardUnicodeText(hwnd_);
+
+    const std::vector<std::wstring> lines = splitClipboardLines(clipboardText);
+    if (lines.empty()) {
+        return;
+    }
+
+    size_t startIndex = 0;
+    if (!dataset.selectEntireColumn && dataset.selectedRow >= 0) {
+        startIndex = static_cast<size_t>(dataset.selectedRow);
+    }
+
+    const std::vector<size_t> targetRows = dataset.filteredRows;
+    int changedCount = 0;
+    dataset.redoStack.clear();
+    const int groupId = dataset.nextChangeGroupId++;
+    if (lines.size() == 1) {
+        for (size_t filteredIndex = startIndex; filteredIndex < targetRows.size(); ++filteredIndex) {
+            const size_t sourceRow = targetRows[filteredIndex];
+            if (dataset.selectedColumn < static_cast<int>(dataset.table.rows()[sourceRow].size()) &&
+                dataset.table.rows()[sourceRow][dataset.selectedColumn] != lines[0]) {
+                DatasetState::CellChange change;
+                change.row = sourceRow;
+                change.column = dataset.selectedColumn;
+                change.before = dataset.table.rows()[sourceRow][dataset.selectedColumn];
+                change.after = lines[0];
+                change.groupId = groupId;
+                dataset.undoStack.push_back(change);
+                dataset.table.rows()[sourceRow][dataset.selectedColumn] = lines[0];
+                markModified(dataset, sourceRow, dataset.selectedColumn);
+                ++changedCount;
+            }
+        }
+    } else {
+        for (size_t lineIndex = 0; lineIndex < lines.size() && (startIndex + lineIndex) < targetRows.size(); ++lineIndex) {
+            const size_t sourceRow = targetRows[startIndex + lineIndex];
+            if (dataset.selectedColumn < static_cast<int>(dataset.table.rows()[sourceRow].size()) &&
+                dataset.table.rows()[sourceRow][dataset.selectedColumn] != lines[lineIndex]) {
+                DatasetState::CellChange change;
+                change.row = sourceRow;
+                change.column = dataset.selectedColumn;
+                change.before = dataset.table.rows()[sourceRow][dataset.selectedColumn];
+                change.after = lines[lineIndex];
+                change.groupId = groupId;
+                dataset.undoStack.push_back(change);
+                dataset.table.rows()[sourceRow][dataset.selectedColumn] = lines[lineIndex];
+                markModified(dataset, sourceRow, dataset.selectedColumn);
+                ++changedCount;
+            }
+        }
+    }
+
+    if (changedCount > 0) {
+        rebuildFilteredRows(dataset);
+    }
+    dataset.selectEntireColumn = true;
+    statusText_ = trs("Clipboard pasted into selected column: ", "Secili kolona panodan yapistirildi: ") + std::to_string(changedCount) + trs(" cells.", " hucre.");
+}
+
+void ProtoEditorApp::copySelectionToClipboard(const DatasetState& dataset) const {
+    if (!dataset.loaded || dataset.selectedColumn < 0 || dataset.selectedColumn >= static_cast<int>(dataset.table.columnCount())) {
+        return;
+    }
+
+    if (hasBlockSelection(dataset)) {
+        copySelectedBlockToClipboard(dataset);
+        return;
+    }
+
+    if (dataset.selectEntireColumn) {
+        copySelectedColumnToClipboard(dataset);
+        return;
+    }
+
+    if (dataset.selectedRow < 0 || dataset.selectedRow >= static_cast<int>(dataset.filteredRows.size())) {
+        return;
+    }
+
+    const size_t sourceRow = dataset.filteredRows[dataset.selectedRow];
+    const auto& row = dataset.table.rows()[sourceRow];
+    if (dataset.selectedColumn < static_cast<int>(row.size())) {
+        setClipboardUnicodeText(hwnd_, row[dataset.selectedColumn]);
+    }
+}
+
+void ProtoEditorApp::cutSelectionToClipboard(DatasetState& dataset) {
+    copySelectionToClipboard(dataset);
+    clearSelectionContent(dataset);
+}
+
+void ProtoEditorApp::pasteClipboardIntoSelection(DatasetState& dataset) {
+    if (hasBlockSelection(dataset)) {
+        pasteClipboardIntoSelectedBlock(dataset);
+        return;
+    }
+
+    if (dataset.selectEntireColumn) {
+        pasteClipboardIntoSelectedColumn(dataset);
+        return;
+    }
+
+    if (!dataset.loaded || dataset.selectedColumn < 0 || dataset.selectedRow < 0 || dataset.selectedRow >= static_cast<int>(dataset.filteredRows.size())) {
+        return;
+    }
+
+    const std::wstring clipboardText = getClipboardUnicodeText(hwnd_);
+    const std::vector<std::wstring> lines = splitClipboardLines(clipboardText);
+    if (lines.empty()) {
+        return;
+    }
+
+    const size_t startIndex = static_cast<size_t>(dataset.selectedRow);
+    const std::vector<size_t> targetRows = dataset.filteredRows;
+    int changedCount = 0;
+    dataset.redoStack.clear();
+    const int groupId = dataset.nextChangeGroupId++;
+    for (size_t lineIndex = 0; lineIndex < lines.size() && (startIndex + lineIndex) < targetRows.size(); ++lineIndex) {
+        const size_t sourceRow = targetRows[startIndex + lineIndex];
+        if (dataset.selectedColumn < static_cast<int>(dataset.table.rows()[sourceRow].size()) &&
+            dataset.table.rows()[sourceRow][dataset.selectedColumn] != lines[lineIndex]) {
+            DatasetState::CellChange change;
+            change.row = sourceRow;
+            change.column = dataset.selectedColumn;
+            change.before = dataset.table.rows()[sourceRow][dataset.selectedColumn];
+            change.after = lines[lineIndex];
+            change.groupId = groupId;
+            dataset.undoStack.push_back(change);
+            dataset.table.rows()[sourceRow][dataset.selectedColumn] = lines[lineIndex];
+            markModified(dataset, sourceRow, dataset.selectedColumn);
+            ++changedCount;
+        }
+    }
+    if (changedCount > 0) {
+        rebuildFilteredRows(dataset);
+    }
+    statusText_ = trs("Clipboard pasted into selection: ", "Seçime panodan yapıştırıldı: ") + std::to_string(changedCount) + trs(" cells.", " hücre.");
+}
+
+void ProtoEditorApp::clearSelectionContent(DatasetState& dataset) {
+    if (!dataset.loaded || dataset.selectedColumn < 0 || dataset.selectedColumn >= static_cast<int>(dataset.table.columnCount())) {
+        return;
+    }
+
+    if (hasBlockSelection(dataset)) {
+        clearSelectedBlock(dataset);
+        return;
+    }
+
+    int changedCount = 0;
+    const std::vector<size_t> targetRows = dataset.filteredRows;
+    dataset.redoStack.clear();
+    const int groupId = dataset.nextChangeGroupId++;
+    if (dataset.selectEntireColumn) {
+        for (size_t sourceRow : targetRows) {
+            if (dataset.selectedColumn < static_cast<int>(dataset.table.rows()[sourceRow].size()) &&
+                !dataset.table.rows()[sourceRow][dataset.selectedColumn].empty()) {
+                DatasetState::CellChange change;
+                change.row = sourceRow;
+                change.column = dataset.selectedColumn;
+                change.before = dataset.table.rows()[sourceRow][dataset.selectedColumn];
+                change.after = L"";
+                change.groupId = groupId;
+                dataset.undoStack.push_back(change);
+                dataset.table.rows()[sourceRow][dataset.selectedColumn].clear();
+                markModified(dataset, sourceRow, dataset.selectedColumn);
+                ++changedCount;
+            }
+        }
+    } else if (dataset.selectedRow >= 0 && dataset.selectedRow < static_cast<int>(targetRows.size())) {
+        const size_t sourceRow = targetRows[dataset.selectedRow];
+        if (dataset.selectedColumn < static_cast<int>(dataset.table.rows()[sourceRow].size()) &&
+            !dataset.table.rows()[sourceRow][dataset.selectedColumn].empty()) {
+            DatasetState::CellChange change;
+            change.row = sourceRow;
+            change.column = dataset.selectedColumn;
+            change.before = dataset.table.rows()[sourceRow][dataset.selectedColumn];
+            change.after = L"";
+            change.groupId = groupId;
+            dataset.undoStack.push_back(change);
+            dataset.table.rows()[sourceRow][dataset.selectedColumn].clear();
+            markModified(dataset, sourceRow, dataset.selectedColumn);
+            changedCount = 1;
+        }
+    }
+
+    if (changedCount > 0) {
+        rebuildFilteredRows(dataset);
+    }
+
+    statusText_ = trs("Selection cleared: ", "Seçim temizlendi: ") + std::to_string(changedCount) + trs(" cells.", " hücre.");
+}
+
+void ProtoEditorApp::copyCurrentColumnBuffer(const DatasetState& dataset) {
+    copiedColumnBuffer_.clear();
+    copiedColumnName_.clear();
+
+    if (!dataset.loaded || dataset.selectedColumn < 0 || dataset.selectedColumn >= static_cast<int>(dataset.table.columnCount())) {
+        return;
+    }
+
+    copiedColumnName_ = dataset.table.header()[dataset.selectedColumn];
+    copiedColumnBuffer_.reserve(dataset.filteredRows.size());
+    for (size_t sourceRow : dataset.filteredRows) {
+        const auto& row = dataset.table.rows()[sourceRow];
+        copiedColumnBuffer_.push_back(dataset.selectedColumn < static_cast<int>(row.size()) ? row[dataset.selectedColumn] : L"");
+    }
+
+    statusText_ = trs("Column copied: ", "Kolon kopyalandı: ") + wideToUtf8(copiedColumnName_);
+}
+
+void ProtoEditorApp::pasteCurrentColumnBuffer(DatasetState& dataset) {
+    if (!dataset.loaded || dataset.selectedColumn < 0 || dataset.selectedColumn >= static_cast<int>(dataset.table.columnCount()) || copiedColumnBuffer_.empty()) {
+        return;
+    }
+
+    const std::vector<size_t> targetRows = dataset.filteredRows;
+    const int groupId = dataset.nextChangeGroupId++;
+    int changedCount = 0;
+    dataset.redoStack.clear();
+
+    for (size_t i = 0; i < copiedColumnBuffer_.size() && i < targetRows.size(); ++i) {
+        const size_t sourceRow = targetRows[i];
+        if (dataset.selectedColumn < static_cast<int>(dataset.table.rows()[sourceRow].size()) &&
+            dataset.table.rows()[sourceRow][dataset.selectedColumn] != copiedColumnBuffer_[i]) {
+            DatasetState::CellChange change;
+            change.row = sourceRow;
+            change.column = dataset.selectedColumn;
+            change.before = dataset.table.rows()[sourceRow][dataset.selectedColumn];
+            change.after = copiedColumnBuffer_[i];
+            change.groupId = groupId;
+            dataset.undoStack.push_back(change);
+            dataset.table.rows()[sourceRow][dataset.selectedColumn] = copiedColumnBuffer_[i];
+            markModified(dataset, sourceRow, dataset.selectedColumn);
+            ++changedCount;
+        }
+    }
+
+    if (changedCount > 0) {
+        dataset.selectEntireColumn = true;
+        rebuildFilteredRows(dataset);
+    }
+
+    statusText_ = trs("Column pasted: ", "Kolon yapıştırıldı: ") + std::to_string(changedCount) + trs(" cells.", " hücre.");
+}
+
+bool ProtoEditorApp::hasBlockSelection(const DatasetState& dataset) const {
+    return dataset.blockSelectionActive &&
+        dataset.blockStartRow >= 0 &&
+        dataset.blockEndRow >= 0 &&
+        dataset.blockStartColumn >= 0 &&
+        dataset.blockEndColumn >= 0;
+}
+
+void ProtoEditorApp::clearBlockSelection(DatasetState& dataset) {
+    dataset.blockSelectionActive = false;
+    dataset.blockStartRow = -1;
+    dataset.blockEndRow = -1;
+    dataset.blockStartColumn = -1;
+    dataset.blockEndColumn = -1;
+}
+
+void ProtoEditorApp::copySelectedBlockToClipboard(const DatasetState& dataset) const {
+    if (!hasBlockSelection(dataset)) {
+        return;
+    }
+
+    const int rowMin = (std::max)(0, (std::min)(dataset.blockStartRow, dataset.blockEndRow));
+    const int rowMax = (std::min)(static_cast<int>(dataset.filteredRows.size()) - 1, (std::max)(dataset.blockStartRow, dataset.blockEndRow));
+    const int colMin = (std::max)(0, (std::min)(dataset.blockStartColumn, dataset.blockEndColumn));
+    const int colMax = (std::min)(static_cast<int>(dataset.table.columnCount()) - 1, (std::max)(dataset.blockStartColumn, dataset.blockEndColumn));
+
+    std::vector<std::vector<std::wstring>> grid;
+    for (int filteredRow = rowMin; filteredRow <= rowMax; ++filteredRow) {
+        const size_t sourceRow = dataset.filteredRows[filteredRow];
+        std::vector<std::wstring> row;
+        for (int column = colMin; column <= colMax; ++column) {
+            row.push_back(column < static_cast<int>(dataset.table.rows()[sourceRow].size()) ? dataset.table.rows()[sourceRow][column] : L"");
+        }
+        grid.push_back(std::move(row));
+    }
+
+    setClipboardUnicodeText(hwnd_, joinClipboardGrid(grid));
+}
+
+void ProtoEditorApp::pasteClipboardIntoSelectedBlock(DatasetState& dataset) {
+    if (!hasBlockSelection(dataset)) {
+        return;
+    }
+
+    const auto clipboardGrid = splitClipboardGrid(getClipboardUnicodeText(hwnd_));
+    if (clipboardGrid.empty()) {
+        return;
+    }
+
+    const int rowMin = (std::max)(0, (std::min)(dataset.blockStartRow, dataset.blockEndRow));
+    const int rowMax = (std::min)(static_cast<int>(dataset.filteredRows.size()) - 1, (std::max)(dataset.blockStartRow, dataset.blockEndRow));
+    const int colMin = (std::max)(0, (std::min)(dataset.blockStartColumn, dataset.blockEndColumn));
+    const int colMax = (std::min)(static_cast<int>(dataset.table.columnCount()) - 1, (std::max)(dataset.blockStartColumn, dataset.blockEndColumn));
+
+    dataset.redoStack.clear();
+    const int groupId = dataset.nextChangeGroupId++;
+    int changedCount = 0;
+
+    for (int filteredRow = rowMin; filteredRow <= rowMax; ++filteredRow) {
+        const size_t sourceRow = dataset.filteredRows[filteredRow];
+        const int localRow = filteredRow - rowMin;
+        const auto& sourceClipboardRow = clipboardGrid[static_cast<size_t>(clipboardGrid.size() == 1 ? 0 : (std::min)(localRow, static_cast<int>(clipboardGrid.size()) - 1))];
+        for (int column = colMin; column <= colMax; ++column) {
+            if (column >= static_cast<int>(dataset.table.rows()[sourceRow].size())) {
+                continue;
+            }
+            const int localColumn = column - colMin;
+            const std::wstring& nextValue = sourceClipboardRow[static_cast<size_t>(sourceClipboardRow.size() == 1 ? 0 : (std::min)(localColumn, static_cast<int>(sourceClipboardRow.size()) - 1))];
+            if (dataset.table.rows()[sourceRow][column] == nextValue) {
+                continue;
+            }
+
+            DatasetState::CellChange change;
+            change.row = sourceRow;
+            change.column = column;
+            change.before = dataset.table.rows()[sourceRow][column];
+            change.after = nextValue;
+            change.groupId = groupId;
+            dataset.undoStack.push_back(change);
+            dataset.table.rows()[sourceRow][column] = nextValue;
+            markModified(dataset, sourceRow, column);
+            ++changedCount;
+        }
+    }
+
+    if (changedCount > 0) {
+        rebuildFilteredRows(dataset);
+    }
+    statusText_ = trs("Block pasted: ", "Blok yapıştırıldı: ") + std::to_string(changedCount) + trs(" cells.", " hücre.");
+}
+
+void ProtoEditorApp::clearSelectedBlock(DatasetState& dataset) {
+    if (!hasBlockSelection(dataset)) {
+        return;
+    }
+
+    const int rowMin = (std::max)(0, (std::min)(dataset.blockStartRow, dataset.blockEndRow));
+    const int rowMax = (std::min)(static_cast<int>(dataset.filteredRows.size()) - 1, (std::max)(dataset.blockStartRow, dataset.blockEndRow));
+    const int colMin = (std::max)(0, (std::min)(dataset.blockStartColumn, dataset.blockEndColumn));
+    const int colMax = (std::min)(static_cast<int>(dataset.table.columnCount()) - 1, (std::max)(dataset.blockStartColumn, dataset.blockEndColumn));
+
+    dataset.redoStack.clear();
+    const int groupId = dataset.nextChangeGroupId++;
+    int changedCount = 0;
+    for (int filteredRow = rowMin; filteredRow <= rowMax; ++filteredRow) {
+        const size_t sourceRow = dataset.filteredRows[filteredRow];
+        for (int column = colMin; column <= colMax; ++column) {
+            if (column >= static_cast<int>(dataset.table.rows()[sourceRow].size()) ||
+                dataset.table.rows()[sourceRow][column].empty()) {
+                continue;
+            }
+            DatasetState::CellChange change;
+            change.row = sourceRow;
+            change.column = column;
+            change.before = dataset.table.rows()[sourceRow][column];
+            change.after = L"";
+            change.groupId = groupId;
+            dataset.undoStack.push_back(change);
+            dataset.table.rows()[sourceRow][column].clear();
+            markModified(dataset, sourceRow, column);
+            ++changedCount;
+        }
+    }
+
+    if (changedCount > 0) {
+        rebuildFilteredRows(dataset);
+    }
+    statusText_ = trs("Block cleared: ", "Blok temizlendi: ") + std::to_string(changedCount) + trs(" cells.", " hücre.");
+}
+
+std::vector<std::wstring> ProtoEditorApp::collectEnumCandidates(const DatasetState& dataset, int columnIndex) const {
+    std::vector<std::wstring> values;
+    if (!dataset.loaded || columnIndex < 0 || columnIndex >= static_cast<int>(dataset.table.columnCount())) {
+        return values;
+    }
+
+    std::set<std::wstring> unique;
+    for (const auto& row : dataset.table.rows()) {
+        if (columnIndex >= static_cast<int>(row.size()) || row[columnIndex].empty()) {
+            continue;
+        }
+        unique.insert(row[columnIndex]);
+        if (unique.size() > 24) {
+            values.clear();
+            return values;
+        }
+    }
+
+    values.assign(unique.begin(), unique.end());
+    return values;
+}
+
+bool ProtoEditorApp::isEnumCandidateColumn(const DatasetState& dataset, int columnIndex) const {
+    if (!dataset.loaded || columnIndex < 0 || columnIndex >= static_cast<int>(dataset.table.columnCount())) {
+        return false;
+    }
+    if (dataset.config.isFlagColumn(dataset.table.header()[columnIndex])) {
+        return false;
+    }
+
+    const std::wstring& header = dataset.table.header()[columnIndex];
+    const std::wstring headerLower = toLowerCopy(header);
+    if (headerLower.find(L"type") != std::wstring::npos ||
+        headerLower.find(L"subtype") != std::wstring::npos ||
+        headerLower.find(L"rank") != std::wstring::npos ||
+        headerLower.find(L"battle") != std::wstring::npos ||
+        headerLower.find(L"apply") != std::wstring::npos) {
+        return true;
+    }
+
+    return !collectEnumCandidates(dataset, columnIndex).empty();
+}
+
+long long ProtoEditorApp::findNextAvailableVnum(const DatasetState& dataset) const {
+    long long maxVnum = 0;
+    for (const auto& row : dataset.table.rows()) {
+        if (!row.empty() && isIntegerValue(row[0])) {
+            maxVnum = (std::max)(maxVnum, toNumber(row[0]));
+        }
+    }
+    return maxVnum + 1;
+}
+
+long long ProtoEditorApp::findSuggestedVnumBlockStart(const DatasetState& dataset, int count) const {
+    std::set<long long> used;
+    for (const auto& row : dataset.table.rows()) {
+        if (!row.empty() && isIntegerValue(row[0])) {
+            used.insert(toNumber(row[0]));
+        }
+    }
+
+    long long candidate = 1;
+    while (true) {
+        bool freeBlock = true;
+        for (int i = 0; i < count; ++i) {
+            if (used.find(candidate + i) != used.end()) {
+                freeBlock = false;
+                candidate += i + 1;
+                break;
+            }
+        }
+        if (freeBlock) {
+            return candidate;
+        }
+    }
+}
+
+void ProtoEditorApp::assignSequentialVnums(DatasetState& dataset, long long startValue, long long step, bool visibleRowsOnly) {
+    if (!dataset.loaded || dataset.table.columnCount() == 0 || step == 0) {
+        return;
+    }
+
+    std::vector<size_t> targetRows = visibleRowsOnly ? dataset.filteredRows : std::vector<size_t>{};
+    if (!visibleRowsOnly) {
+        targetRows.resize(dataset.table.rows().size());
+        for (size_t i = 0; i < targetRows.size(); ++i) {
+            targetRows[i] = i;
+        }
+    }
+
+    dataset.redoStack.clear();
+    const int groupId = dataset.nextChangeGroupId++;
+    int changedCount = 0;
+    long long currentValue = startValue;
+    for (size_t sourceRow : targetRows) {
+        if (dataset.table.rows()[sourceRow].empty()) {
+            continue;
+        }
+        const std::wstring nextValue = std::to_wstring(currentValue);
+        if (dataset.table.rows()[sourceRow][0] != nextValue) {
+            DatasetState::CellChange change;
+            change.row = sourceRow;
+            change.column = 0;
+            change.before = dataset.table.rows()[sourceRow][0];
+            change.after = nextValue;
+            change.groupId = groupId;
+            dataset.undoStack.push_back(change);
+            dataset.table.rows()[sourceRow][0] = nextValue;
+            markModified(dataset, sourceRow, 0);
+            ++changedCount;
+        }
+        currentValue += step;
+    }
+
+    if (changedCount > 0) {
+        rebuildFilteredRows(dataset);
+        if (dataset.linkedEditing && dataset.namesLoaded) {
+            syncLinkedNamesFromProto(dataset);
+        }
+    }
+    statusText_ = trs("Sequential VNUM assignment applied: ", "Ardışık VNUM ataması uygulandı: ") + std::to_string(changedCount) + trs(" rows.", " satır.");
+}
+
+bool ProtoEditorApp::restoreSnapshot(DatasetState& dataset, const std::wstring& snapshotPath) {
+    if (!dataset.loaded || snapshotPath.empty()) {
+        return false;
+    }
+
+    TsvFile snapshotTable;
+    if (!snapshotTable.load(snapshotPath)) {
+        MessageBoxW(hwnd_, snapshotTable.lastError().c_str(), trw(L"Snapshot Restore Error", L"Snapshot Geri Yükleme Hatası").c_str(), MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    dataset.table = snapshotTable;
+    dataset.modified = true;
+    dataset.undoStack.clear();
+    dataset.redoStack.clear();
+    clearModified(dataset);
+    clearBlockSelection(dataset);
+    rebuildFilteredRows(dataset);
+    statusText_ = trs("Snapshot restored.", "Snapshot geri yüklendi.");
+    return true;
+}
+
+void ProtoEditorApp::refreshDependencies(DatasetState& dataset) {
+    dataset.dependencyEntries.clear();
+    dataset.dependenciesScanned = false;
+    if (!dataset.loaded || dataset.selectedRow < 0 || dataset.selectedRow >= static_cast<int>(dataset.filteredRows.size())) {
+        return;
+    }
+
+    const size_t sourceRow = dataset.filteredRows[dataset.selectedRow];
+    if (dataset.table.rows()[sourceRow].empty()) {
+        return;
+    }
+
+    const std::wstring key = dataset.table.rows()[sourceRow][0];
+    if (key.empty()) {
+        return;
+    }
+
+    if (dataset.namesLoaded) {
+        for (const auto& row : dataset.namesTable.rows()) {
+            if (!row.empty() && row[0] == key) {
+                dataset.dependencyEntries.push_back({ trw(L"Linked names", L"Bağlı names"), row.size() > 1 ? row[1] : L"" });
+                break;
+            }
+        }
+    }
+
+    if (dataset.compareLoaded) {
+        for (const auto& row : dataset.compareTable.rows()) {
+            if (!row.empty() && row[0] == key) {
+                dataset.dependencyEntries.push_back({ trw(L"Compare proto", L"Karşılaştırma protosu"), trw(L"Same VNUM exists in compare dataset.", L"Aynı VNUM karşılaştırma verisinde mevcut.") });
+                break;
+            }
+        }
+    }
+
+    const std::filesystem::path baseDir = std::filesystem::path(dataset.filePath).parent_path();
+    const std::string keyUtf8 = wideToUtf8(key);
+    size_t hitCount = 0;
+    std::error_code ec;
+    for (std::filesystem::recursive_directory_iterator it(baseDir, ec), end; it != end && hitCount < 150; it.increment(ec)) {
+        if (ec || !it->is_regular_file()) {
+            continue;
+        }
+        const auto extension = toLowerCopy(it->path().extension().wstring());
+        if (extension != L".txt" && extension != L".tsv" && extension != L".lua" && extension != L".quest" &&
+            extension != L".py" && extension != L".cpp" && extension != L".h" && extension != L".csv") {
+            continue;
+        }
+        if (it->path().wstring() == dataset.filePath || (!dataset.namesPath.empty() && it->path().wstring() == dataset.namesPath)) {
+            continue;
+        }
+
+        std::ifstream file(it->path(), std::ios::binary);
+        if (!file) {
+            continue;
+        }
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        if (content.find(keyUtf8) == std::string::npos) {
+            continue;
+        }
+
+        dataset.dependencyEntries.push_back({ it->path().filename().wstring(), trw(L"Text reference found.", L"Metin referansı bulundu.") });
+        ++hitCount;
+    }
+
+    dataset.dependenciesScanned = true;
+}
+
 bool ProtoEditorApp::confirmDiscardChanges(const DatasetState& dataset, const wchar_t* action) const {
     if (!dataset.modified) {
         return true;
@@ -3405,6 +5086,21 @@ LRESULT ProtoEditorApp::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     case WM_KEYDOWN:
         if (hasActiveDataset()) {
             DatasetState& dataset = activeDataset();
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'A') {
+                if (dataset.selectedColumn >= 0 && dataset.selectedRow >= 0 && !dataset.selectEntireColumn) {
+                    clearBlockSelection(dataset);
+                    selectCurrentColumn(dataset);
+                }
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'C') {
+                copySelectionToClipboard(dataset);
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'V') {
+                pasteClipboardIntoSelection(dataset);
+                return 0;
+            }
             if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'S') {
                 saveDataset(dataset, false);
                 return 0;
@@ -3430,7 +5126,7 @@ LRESULT ProtoEditorApp::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 return 0;
             }
             if (wParam == VK_DELETE) {
-                deleteSelectedRow(dataset);
+                clearSelectionContent(dataset);
                 return 0;
             }
         }

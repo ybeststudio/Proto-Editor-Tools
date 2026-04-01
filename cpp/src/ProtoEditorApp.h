@@ -34,6 +34,7 @@ private:
             int column = -1;
             std::wstring before;
             std::wstring after;
+            int groupId = 0;
         };
 
         struct ValidationIssue {
@@ -46,6 +47,11 @@ private:
         struct SnapshotInfo {
             std::wstring path;
             std::wstring timestamp;
+        };
+
+        struct DependencyEntry {
+            std::wstring source;
+            std::wstring detail;
         };
 
         struct DiffEntry {
@@ -83,6 +89,7 @@ private:
         std::string filterText;
         std::vector<CellChange> undoStack;
         std::vector<CellChange> redoStack;
+        int nextChangeGroupId = 1;
         std::string gotoRowBuffer;
         std::vector<ValidationIssue> validationIssues;
         std::vector<SnapshotInfo> snapshots;
@@ -100,6 +107,16 @@ private:
         bool linkedEditing = false;
         bool changedRowsOnlyExport = false;
         std::string workspacePreset = "default";
+        bool selectEntireColumn = false;
+        bool blockSelectionActive = false;
+        int blockStartRow = -1;
+        int blockStartColumn = -1;
+        int blockEndRow = -1;
+        int blockEndColumn = -1;
+        std::vector<DependencyEntry> dependencyEntries;
+        bool dependenciesScanned = false;
+        std::vector<std::wstring> compareVisibleKeys;
+        bool compareViewDirty = true;
     };
 
     bool initializeWindow();
@@ -135,6 +152,9 @@ private:
     void drawExportModal();
     void drawRulePresetPanel();
     void drawThemeBuilder();
+    void drawVnumToolsPanel();
+    void drawSnapshotManagerPanel();
+    void drawDependencyPanel();
 
     void rebuildFilteredRows(DatasetState& dataset);
     void sortFilteredRows(DatasetState& dataset);
@@ -169,6 +189,31 @@ private:
     void moveColumn(DatasetState& dataset, int fromIndex, int toIndex);
     void bulkSetColumnValue(DatasetState& dataset, int columnIndex, const std::wstring& value, bool visibleRowsOnly);
     void bulkReplaceColumnValue(DatasetState& dataset, int columnIndex, const std::wstring& findValue, const std::wstring& replaceValue, bool visibleRowsOnly);
+    void selectCurrentColumn(DatasetState& dataset);
+    void copySelectedColumnToClipboard(const DatasetState& dataset) const;
+    void pasteClipboardIntoSelectedColumn(DatasetState& dataset);
+    void copySelectionToClipboard(const DatasetState& dataset) const;
+    void cutSelectionToClipboard(DatasetState& dataset);
+    void pasteClipboardIntoSelection(DatasetState& dataset);
+    void clearSelectionContent(DatasetState& dataset);
+    void copyCurrentColumnBuffer(const DatasetState& dataset);
+    void pasteCurrentColumnBuffer(DatasetState& dataset);
+    void copySelectedBlockToClipboard(const DatasetState& dataset) const;
+    void pasteClipboardIntoSelectedBlock(DatasetState& dataset);
+    void clearSelectedBlock(DatasetState& dataset);
+    bool hasBlockSelection(const DatasetState& dataset) const;
+    void clearBlockSelection(DatasetState& dataset);
+    std::vector<std::wstring> collectEnumCandidates(const DatasetState& dataset, int columnIndex) const;
+    bool isEnumCandidateColumn(const DatasetState& dataset, int columnIndex) const;
+    long long findNextAvailableVnum(const DatasetState& dataset) const;
+    long long findSuggestedVnumBlockStart(const DatasetState& dataset, int count) const;
+    void assignSequentialVnums(DatasetState& dataset, long long startValue, long long step, bool visibleRowsOnly);
+    bool restoreSnapshot(DatasetState& dataset, const std::wstring& snapshotPath);
+    void refreshDependencies(DatasetState& dataset);
+    void refreshCompareViewRows(DatasetState& dataset);
+    int findColumnIndexByHeader(const std::vector<std::wstring>& headers, const std::wstring& name) const;
+    void transferCompareRowByHeader(DatasetState& dataset, const std::wstring& key, bool compareToActive);
+    void transferCompareCellByHeader(DatasetState& dataset, const std::wstring& key, const std::wstring& columnName, bool compareToActive);
     bool confirmDiscardChanges(const DatasetState& dataset, const wchar_t* action) const;
     bool hasActiveDataset() const;
     DatasetState& activeDataset();
@@ -215,6 +260,8 @@ private:
     bool flagModalOpen_ = false;
 
     std::string statusText_ = "Ready";
+    std::vector<std::wstring> copiedColumnBuffer_;
+    std::wstring copiedColumnName_;
     bool requestScrollToSelection_ = false;
     bool aboutModalOpen_ = false;
     bool gotoRowModalOpen_ = false;
@@ -239,6 +286,21 @@ private:
     bool showWorkspacePanel_ = false;
     bool showRulePresetPanel_ = false;
     bool showThemeBuilder_ = false;
+    bool showVnumToolsPanel_ = false;
+    bool showSnapshotManagerPanel_ = false;
+    bool showDependencyPanel_ = false;
+    std::wstring compareSelectedKey_;
+    int compareSelectedDetailColumn_ = -1;
+    int compareFilterColumn_ = -1;
+    bool compareSyncScroll_ = true;
+    float compareSharedScrollX_ = 0.0f;
+    float compareSharedScrollY_ = 0.0f;
+    int compareScrollSource_ = -1;
+    bool compareRequestScrollToSelection_ = false;
+    std::string vnumStartBuffer_;
+    std::string vnumStepBuffer_ = "1";
+    bool vnumVisibleRowsOnly_ = true;
+    int selectedSnapshotIndex_ = -1;
 };
 
 #endif

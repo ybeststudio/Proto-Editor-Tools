@@ -21,11 +21,15 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 - native desktop performance
 - encoding-aware file handling
 - smart flag editing
+- enum-aware editing
 - bulk edit operations
-- compare and validation tooling
+- professional compare and validation tooling
 - linked names workflow
 - workspace presets
 - snapshot backup protection
+- VNUM management tools
+- multi-cell block selection
+- dependency inspection tools
 - embedded default proto config support
 - modern theming and RGB accent support
 
@@ -37,10 +41,13 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 
 - direct cell editing
 - smart flag editor
+- enum dropdown editor
 - row insert / duplicate / delete
 - go to VNUM
 - column add / rename / delete / reorder
 - column visibility and pin workflow
+- multi-cell block selection
+- column copy / paste workflow
 
 ### Mass Editing
 
@@ -54,6 +61,7 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 
 - temp-file safe save flow
 - snapshot backup generation
+- snapshot restore workflow
 - validation panel
 - undo / redo
 - history panel
@@ -61,9 +69,14 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 
 ### Advanced Tooling
 
-- proto compare panel
-- merge compare row into active dataset
+- WinMerge-style dual-grid compare workspace
+- synchronized compare scrolling
+- row / field level diff highlighting
+- right-to-left and left-to-right field transfer
+- header-aware row merge without breaking column alignment
 - linked `item_names` / `mob_names`
+- dependency checker
+- VNUM tools
 - global search
 - advanced filtering
 - export support
@@ -88,6 +101,8 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 - item balancing
 - mob balancing
 - flag management
+- VNUM maintenance and cleanup
+- diff / merge review between proto revisions
 - names synchronization
 - large refactor passes
 - safer batch editing before live deployment
@@ -144,8 +159,11 @@ Encoding is preserved as accurately as possible during load/save:
 - `UTF-8`
 - `UTF-8 BOM`
 - `CP1254`
+- `CP1252`
+- `CP949`
+- `UTF-16 LE / BE`
 
-This is especially important for Turkish `Metin2` proto and names files.
+This is especially important for Turkish and Korean `Metin2` proto and names files.
 
 ---
 
