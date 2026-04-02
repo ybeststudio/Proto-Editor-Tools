@@ -10,6 +10,8 @@
 
 #include <d3d11.h>
 #include <commdlg.h>
+#include <shellapi.h>
+#include <shlobj.h>
 
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
@@ -51,13 +53,28 @@ namespace {
         return value;
     }
 
+    std::wstring trimCopy(std::wstring value) {
+        auto isSpace = [](wchar_t ch) {
+            return ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n';
+        };
+
+        while (!value.empty() && isSpace(value.front())) {
+            value.erase(value.begin());
+        }
+        while (!value.empty() && isSpace(value.back())) {
+            value.pop_back();
+        }
+        return value;
+    }
+
     long long toNumber(const std::wstring& value) {
-        if (value.empty()) {
+        const std::wstring trimmed = trimCopy(value);
+        if (trimmed.empty()) {
             return 0;
         }
 
         wchar_t* end = nullptr;
-        return std::wcstoll(value.c_str(), &end, 10);
+        return std::wcstoll(trimmed.c_str(), &end, 10);
     }
 
     std::vector<std::wstring> splitFlags(const std::wstring& value) {
@@ -128,21 +145,22 @@ namespace {
     }
 
     bool isIntegerValue(const std::wstring& value) {
-        if (value.empty()) {
+        const std::wstring trimmed = trimCopy(value);
+        if (trimmed.empty()) {
             return true;
         }
 
         size_t index = 0;
-        if (value[0] == L'-' || value[0] == L'+') {
+        if (trimmed[0] == L'-' || trimmed[0] == L'+') {
             index = 1;
         }
 
-        if (index >= value.size()) {
+        if (index >= trimmed.size()) {
             return false;
         }
 
-        for (; index < value.size(); ++index) {
-            if (!iswdigit(value[index])) {
+        for (; index < trimmed.size(); ++index) {
+            if (!iswdigit(trimmed[index])) {
                 return false;
             }
         }
@@ -688,8 +706,9 @@ void ProtoEditorApp::renderFrame() {
     ImGui::NewFrame();
 
     drawMenuBar();
-    drawToolbar();
+    drawPremiumToolbar();
     drawSidebar();
+    drawFolderPanel();
     drawTablePanel();
     drawInspectorPanel();
     drawStatusBar();
@@ -944,19 +963,19 @@ void ProtoEditorApp::drawToolbar() {
         return;
     }
 
-    if (ImGui::Button(tr("Open Item", u8"Item A\u00E7"))) {
+    if (ImGui::Button(tr("Open Item Proto", "Item Proto Aç"))) {
         loadDataset(DatasetKind::Item, openFileDialog(trw(L"Open item_proto", L"item_proto aç").c_str(), trw(L"Proto files (*.txt;*.tsv)\0*.txt;*.tsv\0All files (*.*)\0*.*\0", L"Proto dosyaları (*.txt;*.tsv)\0*.txt;*.tsv\0Tüm dosyalar (*.*)\0*.*\0").c_str()));
     }
     ImGui::SameLine();
-    if (ImGui::Button(tr("Open Mob", u8"Mob A\u00E7"))) {
+    if (ImGui::Button(tr("Open Mob Proto", "Mob Proto Aç"))) {
         loadDataset(DatasetKind::Mob, openFileDialog(trw(L"Open mob_proto", L"mob_proto aç").c_str(), trw(L"Proto files (*.txt;*.tsv)\0*.txt;*.tsv\0All files (*.*)\0*.*\0", L"Proto dosyaları (*.txt;*.tsv)\0*.txt;*.tsv\0Tüm dosyalar (*.*)\0*.*\0").c_str()));
     }
     ImGui::SameLine();
-    if (ImGui::Button(tr("Save Active", "Aktifi Kaydet")) && hasActiveDataset() && activeDataset().loaded) {
+    if (ImGui::Button(tr("Save", "Kaydet")) && hasActiveDataset() && activeDataset().loaded) {
         saveDataset(activeDataset(), false);
     }
     ImGui::SameLine();
-    if (ImGui::Button(tr("Reload Active", u8"Aktifi Yeniden Y\u00FCkle")) && hasActiveDataset() && activeDataset().loaded) {
+    if (ImGui::Button(tr("Reload", "Yeniden Yükle")) && hasActiveDataset() && activeDataset().loaded) {
         loadDataset(activeDataset().kind, activeDataset().filePath);
     }
     ImGui::SameLine();
@@ -968,9 +987,15 @@ void ProtoEditorApp::drawToolbar() {
         redo(activeDataset());
     }
     ImGui::SameLine();
-    ImGui::TextUnformatted(tr("Language:", u8"Dil:"));
+    const float languageBlockWidth = 120.0f;
+    const float cursorX = ImGui::GetCursorPosX();
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    if (availableWidth > languageBlockWidth) {
+        ImGui::SetCursorPosX(cursorX + availableWidth - languageBlockWidth);
+    }
+    ImGui::TextUnformatted(tr("Dil:", "Dil:"));
     ImGui::SameLine();
-    if (ImGui::Button("TR")) {
+    if (ImGui::Button("TR", ImVec2(40.0f, 0.0f))) {
         preferences_.language = UiLanguage::Turkish;
         for (auto& dataset : datasets_) {
             loadLinkedNames(dataset);
@@ -978,14 +1003,13 @@ void ProtoEditorApp::drawToolbar() {
         preferences_.save();
     }
     ImGui::SameLine();
-    if (ImGui::Button("EN")) {
+    if (ImGui::Button("EN", ImVec2(40.0f, 0.0f))) {
         preferences_.language = UiLanguage::English;
         for (auto& dataset : datasets_) {
             loadLinkedNames(dataset);
         }
         preferences_.save();
     }
-
     ImGui::Separator();
     if (ImGui::BeginTabBar("DatasetTabs")) {
         for (int index = 0; index < kDatasetCount; ++index) {
@@ -1008,15 +1032,15 @@ void ProtoEditorApp::drawToolbar() {
 
 void ProtoEditorApp::drawSidebar() {
     ImGui::SetNextWindowPos(ImVec2(12.0f, 134.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(280.0f, ImGui::GetIO().DisplaySize.y - 182.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(280.0f, 360.0f), ImGuiCond_Always);
 
-    if (!ImGui::Begin(tr("Workspace", "Çalışma Alanı"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+    if (!ImGui::Begin(tr("File Panel", "Dosya Paneli"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }
 
     DatasetState& dataset = activeDataset();
-    ImGui::TextUnformatted(dataset.loaded ? tr("Dataset loaded", "Veri yüklendi") : tr("Dataset not loaded", "Veri yüklenmedi"));
+    ImGui::TextUnformatted(dataset.loaded ? tr("File ready", "Dosya hazır") : tr("No file loaded", "Dosya yüklenmedi"));
     ImGui::Separator();
     ImGui::TextWrapped(tr("Current file: %s", "Mevcut dosya: %s"), dataset.filePath.empty() ? "-" : wideToUtf8(dataset.filePath).c_str());
     ImGui::TextWrapped(tr("Config: %s", "Config: %s"), dataset.configPath.empty() ? "-" : wideToUtf8(dataset.configPath).c_str());
@@ -1168,11 +1192,91 @@ void ProtoEditorApp::drawSidebar() {
     ImGui::End();
 }
 
+void ProtoEditorApp::drawFolderPanel() {
+    ImGui::SetNextWindowPos(ImVec2(12.0f, 506.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(280.0f, ImGui::GetIO().DisplaySize.y - 554.0f), ImGuiCond_Always);
+
+    if (!ImGui::Begin(tr("Folder Panel", "Klasör Paneli"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::Button(tr("Select Folder", "Klasör Seç"), ImVec2(-1.0f, 0.0f))) {
+        BROWSEINFOW bi = {};
+        bi.hwndOwner = hwnd_;
+        bi.lpszTitle = trw(L"Select folder", L"Klasör seç").c_str();
+        bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+        PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+        if (pidl != nullptr) {
+            wchar_t folderPath[MAX_PATH] = {};
+            if (SHGetPathFromIDListW(pidl, folderPath)) {
+                refreshFolderFiles(folderPath);
+            }
+            CoTaskMemFree(pidl);
+        }
+    }
+    if (currentFolderPath_.empty()) {
+        DatasetState& dataset = activeDataset();
+        if (!dataset.filePath.empty()) {
+            refreshFolderFiles(std::filesystem::path(dataset.filePath).parent_path().wstring());
+        }
+    }
+
+    if (currentFolderPath_.empty()) {
+        ImGui::TextWrapped("%s", tr("Choose a folder. All .txt / .tsv files in that folder will be listed here.",
+            "Bir klasör seçin. O klasördeki tüm .txt / .tsv dosyaları burada listelenecek."));
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextWrapped("%s", wideToUtf8(currentFolderPath_).c_str());
+    ImGui::Separator();
+
+    ImGui::BeginChild("FolderFileList", ImVec2(0.0f, -28.0f), true);
+    for (const auto& fullPath : currentFolderFiles_) {
+        const std::filesystem::path candidate(fullPath);
+        const std::wstring fileName = candidate.filename().wstring();
+        std::string label;
+        const std::wstring lower = toLowerCopy(fileName);
+        if (lower.find(L"_proto") != std::wstring::npos) {
+            label = "[PROTO] ";
+        } else if (lower.find(L"_names") != std::wstring::npos) {
+            label = "[NAMES] ";
+        } else {
+            label = "[TXT] ";
+        }
+        label += wideToUtf8(fileName);
+
+        if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick)) {
+            if (ImGui::IsMouseDoubleClicked(0)) {
+                const std::wstring lowerPath = toLowerCopy(candidate.wstring());
+                if (lowerPath.find(L"item_proto") != std::wstring::npos) {
+                    loadDataset(DatasetKind::Item, candidate.wstring());
+                } else if (lowerPath.find(L"mob_proto") != std::wstring::npos) {
+                    loadDataset(DatasetKind::Mob, candidate.wstring());
+                } else if (lowerPath.find(L"item_names") != std::wstring::npos) {
+                    loadNamesFile(DatasetKind::Item, candidate.wstring());
+                } else if (lowerPath.find(L"mob_names") != std::wstring::npos) {
+                    loadNamesFile(DatasetKind::Mob, candidate.wstring());
+                } else if (lowerPath.find(L"_names") != std::wstring::npos) {
+                    loadNamesFile(activeDataset().kind, candidate.wstring());
+                } else {
+                    loadDataset(activeDataset().kind, candidate.wstring());
+                }
+            }
+        }
+    }
+    ImGui::EndChild();
+    ImGui::TextWrapped("%s", tr("Double-click a file to load it.", "Bir dosyayı yüklemek için çift tıklayın."));
+
+    ImGui::End();
+}
+
 void ProtoEditorApp::drawTablePanel() {
     ImGui::SetNextWindowPos(ImVec2(304.0f, 134.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x - 628.0f, ImGui::GetIO().DisplaySize.y - 182.0f), ImGuiCond_Always);
 
-    if (!ImGui::Begin(tr("Proto Grid", "Proto Grid"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+    if (!ImGui::Begin(tr("Data Workspace", "Veri Çalışma Alanı"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }
@@ -1184,16 +1288,36 @@ void ProtoEditorApp::drawTablePanel() {
         return;
     }
 
+    if (ImGui::BeginTabBar("GridViews")) {
+        const std::string protoTab = wideToUtf8(dataset.title.empty() ? trw(L"Proto", L"Proto") : dataset.title);
+        if (ImGui::BeginTabItem(protoTab.c_str())) {
+            dataset.showNamesGrid = false;
+            ImGui::EndTabItem();
+        }
+        if (dataset.namesLoaded) {
+            std::wstring namesTitle = dataset.kind == DatasetKind::Item ? L"item_names" : L"mob_names";
+            if (ImGui::BeginTabItem(wideToUtf8(namesTitle).c_str())) {
+                dataset.showNamesGrid = true;
+                ImGui::EndTabItem();
+            }
+        }
+        ImGui::EndTabBar();
+    }
+
+    TsvFile& gridTable = dataset.showNamesGrid && dataset.namesLoaded ? dataset.namesTable : dataset.table;
+    const auto& gridHeader = gridTable.header();
+    const auto& gridRows = gridTable.rows();
+
     std::vector<int> renderColumns;
-    renderColumns.reserve(dataset.table.header().size());
+    renderColumns.reserve(gridHeader.size());
     for (int column : dataset.pinnedColumns) {
         if (column >= 0 &&
-            column < static_cast<int>(dataset.table.columnCount()) &&
+            column < static_cast<int>(gridTable.columnCount()) &&
             dataset.hiddenColumns.find(column) == dataset.hiddenColumns.end()) {
             renderColumns.push_back(column);
         }
     }
-    for (int column = 0; column < static_cast<int>(dataset.table.columnCount()); ++column) {
+    for (int column = 0; column < static_cast<int>(gridTable.columnCount()); ++column) {
         if (dataset.hiddenColumns.find(column) != dataset.hiddenColumns.end()) {
             continue;
         }
@@ -1234,23 +1358,27 @@ void ProtoEditorApp::drawTablePanel() {
             if (column == 0) {
                 flags |= ImGuiTableColumnFlags_DefaultSort;
             }
-            ImGui::TableSetupColumn(wideToUtf8(dataset.table.header()[column]).c_str(), flags, 140.0f, static_cast<ImGuiID>(column));
+            ImGui::TableSetupColumn(wideToUtf8(gridHeader[column]).c_str(), flags, 140.0f, static_cast<ImGuiID>(column));
         }
         ImGui::TableHeadersRow();
 
-        if (ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs(); sortSpecs && sortSpecs->SpecsDirty && sortSpecs->SpecsCount > 0) {
-            dataset.sortColumn = static_cast<int>(sortSpecs->Specs[0].ColumnUserID);
-            dataset.sortAscending = sortSpecs->Specs[0].SortDirection != ImGuiSortDirection_Descending;
-            sortFilteredRows(dataset);
-            sortSpecs->SpecsDirty = false;
+        if (!dataset.showNamesGrid) {
+            if (ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs(); sortSpecs && sortSpecs->SpecsDirty && sortSpecs->SpecsCount > 0) {
+                dataset.preservePhysicalRowOrder = false;
+                dataset.sortColumn = static_cast<int>(sortSpecs->Specs[0].ColumnUserID);
+                dataset.sortAscending = sortSpecs->Specs[0].SortDirection != ImGuiSortDirection_Descending;
+                sortFilteredRows(dataset);
+                sortSpecs->SpecsDirty = false;
+            }
         }
 
         ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(dataset.filteredRows.size()));
+        const int rowCount = dataset.showNamesGrid ? static_cast<int>(gridRows.size()) : static_cast<int>(dataset.filteredRows.size());
+        clipper.Begin(rowCount);
         while (clipper.Step()) {
             for (int filteredIndex = clipper.DisplayStart; filteredIndex < clipper.DisplayEnd; ++filteredIndex) {
-                const size_t sourceRow = dataset.filteredRows[filteredIndex];
-                const auto& row = dataset.table.rows()[sourceRow];
+                const size_t sourceRow = dataset.showNamesGrid ? static_cast<size_t>(filteredIndex) : dataset.filteredRows[filteredIndex];
+                const auto& row = gridRows[sourceRow];
                 ImGui::TableNextRow();
 
                 for (size_t renderIndex = 0; renderIndex < renderColumns.size(); ++renderIndex) {
@@ -1297,10 +1425,14 @@ void ProtoEditorApp::drawTablePanel() {
                             dataset.dependencyEntries.clear();
                         }
                         if (ImGui::IsMouseDoubleClicked(0)) {
+                            if (dataset.showNamesGrid) {
+                                openCellEditor(dataset, sourceRow, column, true);
+                            } else {
                             if (dataset.config.isFlagColumn(dataset.table.header()[column])) {
                                 openFlagEditor(dataset, sourceRow, column);
                             } else {
                                 openCellEditor(dataset, sourceRow, column);
+                            }
                             }
                         }
                     }
@@ -1319,32 +1451,32 @@ void ProtoEditorApp::drawTablePanel() {
                         if (ImGui::MenuItem(tr("Copy", "Kopyala"), "Ctrl+C")) {
                             copySelectionToClipboard(dataset);
                         }
-                        if (ImGui::MenuItem(tr("Cut", "Kes"))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Cut", "Kes"))) {
                             cutSelectionToClipboard(dataset);
                         }
-                        if (ImGui::MenuItem(tr("Paste", "Yapıştır"), "Ctrl+V")) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Paste", "Yapıştır"), "Ctrl+V")) {
                             pasteClipboardIntoSelection(dataset);
                         }
-                        if (ImGui::MenuItem(tr("Clear", "Temizle"))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Clear", "Temizle"))) {
                             clearSelectionContent(dataset);
                         }
-                        if (ImGui::MenuItem(tr("Clear selected block", "Seçili bloğu temizle"), nullptr, false, hasBlockSelection(dataset))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Clear selected block", "Seçili bloğu temizle"), nullptr, false, hasBlockSelection(dataset))) {
                             clearSelectedBlock(dataset);
                         }
                         ImGui::Separator();
-                        if (ImGui::MenuItem(tr("Copy column", "Kolonu kopyala"))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Copy column", "Kolonu kopyala"))) {
                             dataset.selectedRow = filteredIndex;
                             dataset.selectedColumn = column;
                             dataset.selectEntireColumn = true;
                             copyCurrentColumnBuffer(dataset);
                         }
-                        if (ImGui::MenuItem(tr("Paste column", "Kolonu yapıştır"), nullptr, false, !copiedColumnBuffer_.empty())) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Paste column", "Kolonu yapıştır"), nullptr, false, !copiedColumnBuffer_.empty())) {
                             dataset.selectedRow = filteredIndex;
                             dataset.selectedColumn = column;
                             dataset.selectEntireColumn = true;
                             pasteCurrentColumnBuffer(dataset);
                         }
-                        if (ImGui::MenuItem(tr("Add column", "Kolon ekle"))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Add column", "Kolon ekle"))) {
                             dataset.selectedColumn = column;
                             columnAction_ = 0;
                             columnTargetIndex_ = column;
@@ -1356,7 +1488,7 @@ void ProtoEditorApp::drawTablePanel() {
                         if (ImGui::MenuItem(tr("Find in this column", "Bu kolonda ara"))) {
                             dataset.filterColumn = column;
                         }
-                        if (ImGui::MenuItem(tr("Bulk replace in this column", "Bu kolonda toplu değiştir"))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Bulk replace in this column", "Bu kolonda toplu değiştir"))) {
                             dataset.selectedColumn = column;
                             bulkEditMode_ = 1;
                             bulkFindBuffer_.clear();
@@ -1365,7 +1497,7 @@ void ProtoEditorApp::drawTablePanel() {
                             bulkEditModalOpen_ = true;
                             ImGui::OpenPopup(tr("Bulk Column Tools###BulkColumnTools", "Toplu Kolon Araçları###BulkColumnTools"));
                         }
-                        if (ImGui::MenuItem(tr("Bulk set in this column", "Bu kolonda toplu değer ata"))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Bulk set in this column", "Bu kolonda toplu değer ata"))) {
                             dataset.selectedColumn = column;
                             bulkEditMode_ = 0;
                             bulkValueBuffer_.clear();
@@ -1388,14 +1520,16 @@ void ProtoEditorApp::drawTablePanel() {
                             dataset.blockEndColumn = column;
                             dataset.selectEntireColumn = false;
                         }
-                        if (ImGui::MenuItem(tr("Duplicate row", "Satırı kopyala"))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Duplicate row", "Satırı kopyala"))) {
                             duplicateSelectedRow(dataset);
                         }
-                        if (ImGui::MenuItem(tr("Delete row", "Satırı sil"))) {
+                        if (!dataset.showNamesGrid && ImGui::MenuItem(tr("Delete row", "Satırı sil"))) {
                             deleteSelectedRow(dataset);
                         }
                         if (ImGui::MenuItem(tr("Open editor", "Düzenleyiciyi aç"))) {
-                            if (dataset.config.isFlagColumn(dataset.table.header()[column])) {
+                            if (dataset.showNamesGrid) {
+                                openCellEditor(dataset, sourceRow, column, true);
+                            } else if (dataset.config.isFlagColumn(dataset.table.header()[column])) {
                                 openFlagEditor(dataset, sourceRow, column);
                             } else {
                                 openCellEditor(dataset, sourceRow, column);
@@ -1415,7 +1549,7 @@ void ProtoEditorApp::drawTablePanel() {
         ImGui::EndTable();
     }
 
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+    if (!dataset.showNamesGrid && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
         if (dataset.selectedRow >= 0 && dataset.selectedColumn >= 0) {
             const size_t sourceRow = dataset.filteredRows[dataset.selectedRow];
             if (dataset.config.isFlagColumn(dataset.table.header()[dataset.selectedColumn])) {
@@ -1433,7 +1567,7 @@ void ProtoEditorApp::drawInspectorPanel() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 312.0f, 134.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(300.0f, ImGui::GetIO().DisplaySize.y - 182.0f), ImGuiCond_Always);
 
-    if (!ImGui::Begin(tr("Inspector", "Inspector"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+    if (!ImGui::Begin(tr("Detail Panel", "Detay Paneli"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }
@@ -1445,21 +1579,27 @@ void ProtoEditorApp::drawInspectorPanel() {
         return;
     }
 
-    const size_t sourceRow = dataset.filteredRows[dataset.selectedRow];
-    auto& row = dataset.table.rows()[sourceRow];
+    const bool showingNamesGrid = dataset.showNamesGrid && dataset.namesLoaded;
+    const size_t sourceRow = showingNamesGrid ? static_cast<size_t>(dataset.selectedRow) : dataset.filteredRows[dataset.selectedRow];
+    auto& row = showingNamesGrid ? dataset.namesTable.rows()[sourceRow] : dataset.table.rows()[sourceRow];
+    const auto& header = showingNamesGrid ? dataset.namesTable.header() : dataset.table.header();
 
     ImGui::Text(tr("Source row: %d", "Kaynak satir: %d"), static_cast<int>(sourceRow + 1));
     if (!row.empty()) {
         ImGui::TextWrapped(tr("Primary key: %s", "Birincil anahtar: %s"), wideToUtf8(row[0]).c_str());
     }
+    if (showingNamesGrid) {
+        ImGui::TextWrapped("%s", tr("Names view is shown in read-only mode for safer proto/name workflow switching.",
+            "Names görünümü daha güvenli proto/name geçişi için salt-okunur modda gösterilir."));
+    }
     ImGui::Separator();
 
     for (size_t column = 0; column < row.size(); ++column) {
         ImGui::PushID(static_cast<int>(column));
-        const std::string columnName = wideToUtf8(dataset.table.header()[column]);
+        const std::string columnName = wideToUtf8(header[column]);
         ImGui::TextUnformatted(columnName.c_str());
 
-        if (dataset.config.isFlagColumn(dataset.table.header()[column])) {
+        if (!showingNamesGrid && dataset.config.isFlagColumn(dataset.table.header()[column])) {
             ImGui::TextWrapped("%s", wideToUtf8(row[column]).c_str());
             if (ImGui::Button(tr("Edit flags", "Flagleri duzenle"), ImVec2(-1.0f, 0.0f))) {
                 dataset.selectedColumn = static_cast<int>(column);
@@ -1467,7 +1607,7 @@ void ProtoEditorApp::drawInspectorPanel() {
             }
         } else {
             ImGui::TextWrapped("%s", wideToUtf8(row[column]).c_str());
-            if (isEnumCandidateColumn(dataset, static_cast<int>(column))) {
+            if (!showingNamesGrid && isEnumCandidateColumn(dataset, static_cast<int>(column))) {
                 const auto candidates = collectEnumCandidates(dataset, static_cast<int>(column));
                 if (!candidates.empty()) {
                     std::string currentValue = wideToUtf8(row[column]);
@@ -1486,7 +1626,7 @@ void ProtoEditorApp::drawInspectorPanel() {
             }
             if (ImGui::Button(tr("Edit value", "Degeri duzenle"), ImVec2(-1.0f, 0.0f))) {
                 dataset.selectedColumn = static_cast<int>(column);
-                openCellEditor(dataset, sourceRow, static_cast<int>(column));
+                openCellEditor(dataset, sourceRow, static_cast<int>(column), showingNamesGrid);
             }
         }
         ImGui::Spacing();
@@ -1538,10 +1678,11 @@ void ProtoEditorApp::drawEditCellModal() {
     }
 
     DatasetState& dataset = activeDataset();
-    const std::string label = wideToUtf8(dataset.table.header()[editColumn_]);
+    TsvFile& targetTable = editOnNamesTable_ ? dataset.namesTable : dataset.table;
+    const std::string label = wideToUtf8(targetTable.header()[editColumn_]);
     std::wstring columnType = L"string";
     for (const auto& def : dataset.config.columns()) {
-        if (def.name == dataset.table.header()[editColumn_]) {
+        if (def.name == targetTable.header()[editColumn_]) {
             columnType = def.type;
             break;
         }
@@ -1575,7 +1716,13 @@ void ProtoEditorApp::drawEditCellModal() {
     }
 
     if (ImGui::Button(tr("Apply", "Uygula"), ImVec2(120.0f, 0.0f)) && inputValid) {
-        setCellValue(dataset, editSourceRow_, editColumn_, utf8ToWide(editBuffer_));
+        if (editOnNamesTable_) {
+            dataset.namesTable.rows()[editSourceRow_][static_cast<size_t>(editColumn_)] = utf8ToWide(editBuffer_);
+            dataset.modified = true;
+            statusText_ = trs("Names value updated.", "Names değeri güncellendi.");
+        } else {
+            setCellValue(dataset, editSourceRow_, editColumn_, utf8ToWide(editBuffer_));
+        }
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -1935,6 +2082,94 @@ void ProtoEditorApp::drawValidationPanel() {
         ImGui::TextWrapped("%s", tr("Large proto detected. Validation is refreshed on demand to keep loading and editing responsive.",
             "Büyük proto algılandı. Yükleme ve düzenleme akışını akıcı tutmak için doğrulama isteğe bağlı yenilenir."));
     }
+    ImGui::Separator();
+
+    int duplicateCount = 0;
+    int emptyRowCount = 0;
+    int mismatchedRowCount = 0;
+    int emptyIntegerCellCount = 0;
+    std::map<std::wstring, int> keyCounts;
+    std::map<std::wstring, std::wstring> typeByHeader;
+    for (const auto& def : dataset.config.columns()) {
+        typeByHeader[def.name] = def.type;
+    }
+    dataset.primaryKeyColumn = detectPrimaryKeyColumn(dataset);
+    const int detectedKeyColumn = std::clamp(dataset.primaryKeyColumn, 0, static_cast<int>(dataset.table.header().empty() ? 0 : dataset.table.header().size() - 1));
+    for (const auto& row : dataset.table.rows()) {
+        bool emptyRow = true;
+        for (size_t column = 0; column < row.size(); ++column) {
+            if (!row[column].empty()) {
+                emptyRow = false;
+            }
+            if (column < dataset.table.header().size()) {
+                auto typeIt = typeByHeader.find(dataset.table.header()[column]);
+                if (typeIt != typeByHeader.end() && typeIt->second == L"int" && row[column].empty()) {
+                    ++emptyIntegerCellCount;
+                }
+            }
+        }
+        if (emptyRow) {
+            ++emptyRowCount;
+        }
+        if (row.size() != dataset.table.header().size()) {
+            ++mismatchedRowCount;
+        }
+        if (detectedKeyColumn < static_cast<int>(row.size())) {
+            const std::wstring keyValue = trimCopy(row[static_cast<size_t>(detectedKeyColumn)]);
+            if (!keyValue.empty()) {
+                ++keyCounts[keyValue];
+            }
+        }
+    }
+    for (const auto& [key, count] : keyCounts) {
+        if (count > 1) {
+            ++duplicateCount;
+        }
+    }
+
+    ImGui::Text(tr("Rows: %d", "Satırlar: %d"), static_cast<int>(dataset.table.rowCount()));
+    if (dataset.primaryKeyColumn >= 0 && dataset.primaryKeyColumn < static_cast<int>(dataset.table.header().size())) {
+        ImGui::Text(tr("Detected sort key: %s", "Algılanan sıralama kolonu: %s"),
+            wideToUtf8(dataset.table.header()[dataset.primaryKeyColumn]).c_str());
+    }
+    ImGui::Text(tr("Duplicate VNUM / keys: %d", "Tekrarlayan VNUM / anahtar: %d"), duplicateCount);
+    ImGui::Text(tr("Empty rows: %d", "Boş satır: %d"), emptyRowCount);
+    ImGui::Text(tr("Column mismatches: %d", "Kolon uyuşmazlığı: %d"), mismatchedRowCount);
+    ImGui::Text(tr("Empty integer cells: %d", "Boş sayısal alan: %d"), emptyIntegerCellCount);
+
+    if (ImGui::Button(tr("Sort by VNUM", "VNUM'a göre sırala"), ImVec2(180.0f, 0.0f))) {
+        sortDatasetByPrimaryKey(dataset);
+        refreshValidation(dataset);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Normalize row width", "Kolon hizasını düzelt"), ImVec2(180.0f, 0.0f))) {
+        normalizeRowWidths(dataset);
+        refreshValidation(dataset);
+    }
+
+    if (ImGui::Button(tr("Remove duplicates keep first", "Tekrarları sil ilk kalsın"), ImVec2(220.0f, 0.0f))) {
+        removeDuplicatePrimaryKeys(dataset, false);
+        refreshValidation(dataset);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Remove duplicates keep last", "Tekrarları sil son kalsın"), ImVec2(220.0f, 0.0f))) {
+        removeDuplicatePrimaryKeys(dataset, true);
+        refreshValidation(dataset);
+    }
+
+    if (ImGui::Button(tr("Fill empty integer cells with 0", "Boş sayısal alanları 0 yap"), ImVec2(220.0f, 0.0f))) {
+        fillEmptyIntegerCells(dataset, L"0");
+        refreshValidation(dataset);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Smart fix all", "Akıllı düzeltmeleri uygula"), ImVec2(180.0f, 0.0f))) {
+        normalizeRowWidths(dataset);
+        fillEmptyIntegerCells(dataset, L"0");
+        removeDuplicatePrimaryKeys(dataset, false);
+        sortDatasetByPrimaryKey(dataset);
+        refreshValidation(dataset);
+    }
+
     ImGui::Separator();
 
     for (const auto& issue : dataset.validationIssues) {
@@ -3282,6 +3517,134 @@ int ProtoEditorApp::findColumnIndexByHeader(const std::vector<std::wstring>& hea
     return -1;
 }
 
+int ProtoEditorApp::detectPrimaryKeyColumn(const DatasetState& dataset) const {
+    if (!dataset.loaded || dataset.table.header().empty()) {
+        return 0;
+    }
+
+    const std::vector<std::wstring> preferredNames = {
+        L"VNUM", L"vnum", L"ID", L"id", L"ITEM_VNUM", L"MOB_VNUM", L"dwVnum"
+    };
+    for (const auto& preferred : preferredNames) {
+        const int index = findColumnIndexByHeader(dataset.table.header(), preferred);
+        if (index >= 0) {
+            return index;
+        }
+    }
+
+    int bestColumn = 0;
+    int bestScore = -1;
+    const size_t sampleCount = (std::min)(dataset.table.rows().size(), static_cast<size_t>(100));
+    for (size_t column = 0; column < dataset.table.header().size(); ++column) {
+        int numericCount = 0;
+        for (size_t rowIndex = 0; rowIndex < sampleCount; ++rowIndex) {
+            const auto& row = dataset.table.rows()[rowIndex];
+            if (column < row.size() && isIntegerValue(trimCopy(row[column])) && !trimCopy(row[column]).empty()) {
+                ++numericCount;
+            }
+        }
+        if (numericCount > bestScore) {
+            bestScore = numericCount;
+            bestColumn = static_cast<int>(column);
+        }
+    }
+
+    return bestColumn;
+}
+
+void ProtoEditorApp::sortNamesTableByActiveOrder(DatasetState& dataset) {
+    if (!dataset.loaded || !dataset.namesLoaded || dataset.namesTable.rows().empty()) {
+        return;
+    }
+
+    const int namesKeyColumn = 0;
+    std::map<std::wstring, std::vector<std::wstring>> namesByKey;
+    for (const auto& row : dataset.namesTable.rows()) {
+        if (namesKeyColumn < static_cast<int>(row.size())) {
+            namesByKey[trimCopy(row[static_cast<size_t>(namesKeyColumn)])] = row;
+        }
+    }
+
+    std::vector<std::vector<std::wstring>> reordered;
+    reordered.reserve(dataset.namesTable.rows().size());
+    for (const auto& protoRow : dataset.table.rows()) {
+        if (dataset.primaryKeyColumn >= static_cast<int>(protoRow.size())) {
+            continue;
+        }
+        const std::wstring keyValue = trimCopy(protoRow[static_cast<size_t>(dataset.primaryKeyColumn)]);
+        const auto it = namesByKey.find(keyValue);
+        if (it != namesByKey.end()) {
+            reordered.push_back(it->second);
+            namesByKey.erase(it);
+        }
+    }
+
+    for (const auto& [key, row] : namesByKey) {
+        reordered.push_back(row);
+    }
+
+    dataset.namesTable.rows() = std::move(reordered);
+}
+
+bool ProtoEditorApp::loadNamesFile(DatasetKind kind, const std::wstring& path) {
+    if (path.empty()) {
+        return false;
+    }
+
+    DatasetState& dataset = datasetByKind(kind);
+    TsvFile loaded;
+    if (!loaded.load(path)) {
+        return false;
+    }
+
+    dataset.namesTable = std::move(loaded);
+    dataset.namesPath = path;
+    dataset.namesLoaded = true;
+    dataset.showNamesGrid = true;
+    activeDatasetIndex_ = kind == DatasetKind::Item ? 0 : 1;
+    addRecentFile(path);
+    refreshFolderFiles(std::filesystem::path(path).parent_path().wstring());
+    statusText_ = trs("Names file loaded.", "Names dosyası yüklendi.");
+    return true;
+}
+
+void ProtoEditorApp::addRecentFile(const std::wstring& path) {
+    if (path.empty()) {
+        return;
+    }
+
+    recentFiles_.erase(std::remove(recentFiles_.begin(), recentFiles_.end(), path), recentFiles_.end());
+    recentFiles_.insert(recentFiles_.begin(), path);
+    if (recentFiles_.size() > 10) {
+        recentFiles_.resize(10);
+    }
+}
+
+void ProtoEditorApp::refreshFolderFiles(const std::wstring& folderPath) {
+    currentFolderPath_ = folderPath;
+    currentFolderFiles_.clear();
+    if (folderPath.empty()) {
+        return;
+    }
+
+    std::error_code ec;
+    std::vector<std::wstring> files;
+    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(folderPath), ec)) {
+        if (ec || !entry.is_regular_file()) {
+            continue;
+        }
+        const std::wstring ext = toLowerCopy(entry.path().extension().wstring());
+        if (ext == L".txt" || ext == L".tsv") {
+            files.push_back(entry.path().wstring());
+        }
+    }
+
+    std::sort(files.begin(), files.end(), [](const std::wstring& lhs, const std::wstring& rhs) {
+        return toLowerCopy(std::filesystem::path(lhs).filename().wstring()) < toLowerCopy(std::filesystem::path(rhs).filename().wstring());
+    });
+    currentFolderFiles_ = std::move(files);
+}
+
 void ProtoEditorApp::transferCompareRowByHeader(DatasetState& dataset, const std::wstring& key, bool compareToActive) {
     if (!dataset.loaded || !dataset.compareLoaded || key.empty()) {
         return;
@@ -3680,7 +4043,7 @@ void ProtoEditorApp::rebuildFilteredRows(DatasetState& dataset) {
 }
 
 void ProtoEditorApp::sortFilteredRows(DatasetState& dataset) {
-    if (!dataset.loaded || dataset.filteredRows.empty()) {
+    if (!dataset.loaded || dataset.filteredRows.empty() || dataset.preservePhysicalRowOrder) {
         return;
     }
 
@@ -3730,8 +4093,10 @@ void ProtoEditorApp::loadDataset(DatasetKind kind, const std::wstring& explicitP
     dataset.selectedRow = -1;
     dataset.filterText.clear();
     dataset.filterColumn = -1;
+    dataset.primaryKeyColumn = 0;
     dataset.sortColumn = 0;
     dataset.sortAscending = true;
+    dataset.preservePhysicalRowOrder = false;
     dataset.undoStack.clear();
     dataset.redoStack.clear();
     dataset.nextChangeGroupId = 1;
@@ -3758,6 +4123,7 @@ void ProtoEditorApp::loadDataset(DatasetKind kind, const std::wstring& explicitP
     dataset.linkedEditing = false;
     dataset.changedRowsOnlyExport = false;
     dataset.workspacePreset = "default";
+    dataset.showNamesGrid = false;
     dataset.blockSelectionActive = false;
     dataset.blockStartRow = -1;
     dataset.blockStartColumn = -1;
@@ -3789,6 +4155,8 @@ void ProtoEditorApp::loadDataset(DatasetKind kind, const std::wstring& explicitP
 
     dataset.filePath = path;
     dataset.loaded = true;
+    addRecentFile(path);
+    refreshFolderFiles(std::filesystem::path(path).parent_path().wstring());
     dataset.rulePresets = {
         { "stun_immune", trw(L"Add stun immune", L"Stun immune ekle"), trw(L"Adds IMMUNE_STUN to filtered rows.", L"Filtreli satirlara IMMUNE_STUN ekler.") },
         { "anti_wolfman", trw(L"Add anti wolfman", L"Anti wolfman ekle"), trw(L"Adds ANTI_WOLFMAN to filtered rows.", L"Filtreli satirlara ANTI_WOLFMAN ekler.") },
@@ -3891,14 +4259,16 @@ void ProtoEditorApp::applyCellChange(DatasetState& dataset, const DatasetState::
     dataset.dependencyEntries.clear();
 }
 
-void ProtoEditorApp::openCellEditor(DatasetState& dataset, size_t sourceRow, int column) {
-    if (sourceRow >= dataset.table.rows().size() || column < 0 || column >= static_cast<int>(dataset.table.rows()[sourceRow].size())) {
+void ProtoEditorApp::openCellEditor(DatasetState& dataset, size_t sourceRow, int column, bool namesTable) {
+    TsvFile& targetTable = namesTable ? dataset.namesTable : dataset.table;
+    if (sourceRow >= targetTable.rows().size() || column < 0 || column >= static_cast<int>(targetTable.rows()[sourceRow].size())) {
         return;
     }
 
     editSourceRow_ = sourceRow;
     editColumn_ = column;
-    editBufferWide_ = dataset.table.rows()[sourceRow][column];
+    editOnNamesTable_ = namesTable;
+    editBufferWide_ = targetTable.rows()[sourceRow][column];
     editBuffer_ = wideToUtf8(editBufferWide_);
     editModalOpen_ = true;
 }
@@ -4947,6 +5317,171 @@ void ProtoEditorApp::refreshDependencies(DatasetState& dataset) {
     dataset.dependenciesScanned = true;
 }
 
+void ProtoEditorApp::sortDatasetByPrimaryKey(DatasetState& dataset) {
+    if (!dataset.loaded || dataset.table.rows().empty()) {
+        return;
+    }
+
+    dataset.primaryKeyColumn = detectPrimaryKeyColumn(dataset);
+    const int keyColumn = std::clamp(dataset.primaryKeyColumn, 0, static_cast<int>(dataset.table.header().size()) - 1);
+
+    auto parseSortableKey = [keyColumn](const std::vector<std::wstring>& row) -> std::tuple<int, long long, std::wstring> {
+        const std::wstring raw = keyColumn < static_cast<int>(row.size()) ? trimCopy(row[static_cast<size_t>(keyColumn)]) : L"";
+        if (raw.empty()) {
+            return { 2, 0, L"" };
+        }
+        if (isIntegerValue(raw)) {
+            return { 0, toNumber(raw), raw };
+        }
+        return { 1, 0, toLowerCopy(raw) };
+    };
+
+    std::stable_sort(dataset.table.rows().begin(), dataset.table.rows().end(), [&parseSortableKey](const auto& lhs, const auto& rhs) {
+        const auto leftKey = parseSortableKey(lhs);
+        const auto rightKey = parseSortableKey(rhs);
+        if (std::get<0>(leftKey) != std::get<0>(rightKey)) {
+            return std::get<0>(leftKey) < std::get<0>(rightKey);
+        }
+
+        if (std::get<0>(leftKey) == 0) {
+            if (std::get<1>(leftKey) != std::get<1>(rightKey)) {
+                return std::get<1>(leftKey) < std::get<1>(rightKey);
+            }
+            return std::get<2>(leftKey) < std::get<2>(rightKey);
+        }
+
+        return std::get<2>(leftKey) < std::get<2>(rightKey);
+    });
+
+    const std::wstring lowerPath = toLowerCopy(dataset.filePath);
+    if (dataset.namesLoaded && lowerPath.find(L"_proto") != std::wstring::npos) {
+        sortNamesTableByActiveOrder(dataset);
+    }
+    if (lowerPath.find(L"_names") != std::wstring::npos) {
+        dataset.primaryKeyColumn = 0;
+    }
+
+    dataset.modified = true;
+    dataset.sortColumn = dataset.primaryKeyColumn;
+    dataset.sortAscending = true;
+    dataset.preservePhysicalRowOrder = true;
+    rebuildFilteredRows(dataset);
+    statusText_ = trs("Dataset sorted by primary key.", "Veri VNUM / anahtara göre sıralandı.");
+}
+
+int ProtoEditorApp::removeDuplicatePrimaryKeys(DatasetState& dataset, bool keepLast) {
+    if (!dataset.loaded || dataset.table.rows().empty()) {
+        return 0;
+    }
+
+    dataset.primaryKeyColumn = detectPrimaryKeyColumn(dataset);
+    const int keyColumn = std::clamp(dataset.primaryKeyColumn, 0, static_cast<int>(dataset.table.header().size()) - 1);
+
+    std::set<size_t> removeIndices;
+    std::map<std::wstring, size_t> keyIndex;
+    for (size_t rowIndex = 0; rowIndex < dataset.table.rows().size(); ++rowIndex) {
+        const auto& row = dataset.table.rows()[rowIndex];
+        if (keyColumn >= static_cast<int>(row.size())) {
+            continue;
+        }
+        const std::wstring keyValue = trimCopy(row[static_cast<size_t>(keyColumn)]);
+        if (keyValue.empty()) {
+            continue;
+        }
+        const auto it = keyIndex.find(keyValue);
+        if (it == keyIndex.end()) {
+            keyIndex[keyValue] = rowIndex;
+            continue;
+        }
+        if (keepLast) {
+            removeIndices.insert(it->second);
+            it->second = rowIndex;
+        } else {
+            removeIndices.insert(rowIndex);
+        }
+    }
+
+    if (removeIndices.empty()) {
+        return 0;
+    }
+
+    std::vector<std::vector<std::wstring>> keptRows;
+    keptRows.reserve(dataset.table.rows().size() - removeIndices.size());
+    for (size_t rowIndex = 0; rowIndex < dataset.table.rows().size(); ++rowIndex) {
+        if (removeIndices.find(rowIndex) == removeIndices.end()) {
+            keptRows.push_back(dataset.table.rows()[rowIndex]);
+        }
+    }
+
+    dataset.table.rows() = std::move(keptRows);
+    dataset.modified = true;
+    clearModified(dataset);
+    rebuildFilteredRows(dataset);
+    statusText_ = trs("Duplicate primary keys cleaned.", "Tekrarlayan anahtarlar temizlendi.");
+    return static_cast<int>(removeIndices.size());
+}
+
+int ProtoEditorApp::normalizeRowWidths(DatasetState& dataset) {
+    if (!dataset.loaded) {
+        return 0;
+    }
+
+    const size_t headerWidth = dataset.table.header().size();
+    int fixedRows = 0;
+    for (auto& row : dataset.table.rows()) {
+        if (row.size() == headerWidth) {
+            continue;
+        }
+        if (row.size() < headerWidth) {
+            row.resize(headerWidth, L"");
+        } else {
+            row.resize(headerWidth);
+        }
+        ++fixedRows;
+    }
+
+    if (fixedRows > 0) {
+        dataset.modified = true;
+        rebuildFilteredRows(dataset);
+        statusText_ = trs("Row widths normalized.", "Satır kolon hizası düzeltildi.");
+    }
+    return fixedRows;
+}
+
+int ProtoEditorApp::fillEmptyIntegerCells(DatasetState& dataset, const std::wstring& fillValue) {
+    if (!dataset.loaded) {
+        return 0;
+    }
+
+    std::map<std::wstring, std::wstring> typeByHeader;
+    for (const auto& def : dataset.config.columns()) {
+        typeByHeader[def.name] = def.type;
+    }
+
+    int fixedCells = 0;
+    for (size_t rowIndex = 0; rowIndex < dataset.table.rows().size(); ++rowIndex) {
+        auto& row = dataset.table.rows()[rowIndex];
+        for (size_t column = 0; column < row.size() && column < dataset.table.header().size(); ++column) {
+            auto typeIt = typeByHeader.find(dataset.table.header()[column]);
+            if (typeIt == typeByHeader.end() || typeIt->second != L"int") {
+                continue;
+            }
+            if (row[column].empty()) {
+                row[column] = fillValue;
+                markModified(dataset, rowIndex, static_cast<int>(column));
+                ++fixedCells;
+            }
+        }
+    }
+
+    if (fixedCells > 0) {
+        dataset.modified = true;
+        rebuildFilteredRows(dataset);
+        statusText_ = trs("Empty integer cells filled.", "Boş sayısal alanlar dolduruldu.");
+    }
+    return fixedCells;
+}
+
 bool ProtoEditorApp::confirmDiscardChanges(const DatasetState& dataset, const wchar_t* action) const {
     if (!dataset.modified) {
         return true;
@@ -5059,6 +5594,9 @@ LRESULT CALLBACK ProtoEditorApp::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 
 LRESULT ProtoEditorApp::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_CREATE:
+        DragAcceptFiles(hwnd, TRUE);
+        return 0;
     case WM_SIZE:
         if (device_ != nullptr && wParam != SIZE_MINIMIZED) {
             cleanupRenderTarget();
@@ -5080,8 +5618,33 @@ LRESULT ProtoEditorApp::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        DragAcceptFiles(hwnd, FALSE);
         running_ = false;
         PostQuitMessage(0);
+        return 0;
+    case WM_DROPFILES:
+        {
+            HDROP drop = reinterpret_cast<HDROP>(wParam);
+            wchar_t path[MAX_PATH] = {};
+            const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+            for (UINT i = 0; i < count; ++i) {
+                if (DragQueryFileW(drop, i, path, MAX_PATH) == 0) {
+                    continue;
+                }
+                const std::wstring dropped = path;
+                const std::wstring lower = toLowerCopy(dropped);
+                if (lower.find(L"item_proto") != std::wstring::npos) {
+                    loadDataset(DatasetKind::Item, dropped);
+                } else if (lower.find(L"mob_proto") != std::wstring::npos) {
+                    loadDataset(DatasetKind::Mob, dropped);
+                } else if (lower.find(L"item_names") != std::wstring::npos) {
+                    loadNamesFile(DatasetKind::Item, dropped);
+                } else if (lower.find(L"mob_names") != std::wstring::npos) {
+                    loadNamesFile(DatasetKind::Mob, dropped);
+                }
+            }
+            DragFinish(drop);
+        }
         return 0;
     case WM_KEYDOWN:
         if (hasActiveDataset()) {
@@ -5136,4 +5699,8 @@ LRESULT ProtoEditorApp::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+void ProtoEditorApp::drawPremiumToolbar()
+{
+    drawToolbar();
 }

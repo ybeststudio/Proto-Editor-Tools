@@ -83,9 +83,11 @@ private:
         bool compareLoaded = false;
         int selectedRow = -1;
         int selectedColumn = -1;
+        int primaryKeyColumn = 0;
         int filterColumn = -1;
         int sortColumn = 0;
         bool sortAscending = true;
+        bool preservePhysicalRowOrder = false;
         std::string filterText;
         std::vector<CellChange> undoStack;
         std::vector<CellChange> redoStack;
@@ -105,6 +107,7 @@ private:
         std::string advancedFilterValue;
         bool compareOnlyChanged = true;
         bool linkedEditing = false;
+        bool showNamesGrid = false;
         bool changedRowsOnlyExport = false;
         std::string workspacePreset = "default";
         bool selectEntireColumn = false;
@@ -132,7 +135,9 @@ private:
 
     void drawMenuBar();
     void drawToolbar();
+    void drawPremiumToolbar();
     void drawSidebar();
+    void drawFolderPanel();
     void drawTablePanel();
     void drawInspectorPanel();
     void drawStatusBar();
@@ -175,7 +180,7 @@ private:
     void executeRulePreset(DatasetState& dataset, const std::string& presetId);
     void setCellValue(DatasetState& dataset, size_t sourceRow, int column, const std::wstring& value);
     void applyCellChange(DatasetState& dataset, const DatasetState::CellChange& change, bool useAfterValue, bool trackReverse);
-    void openCellEditor(DatasetState& dataset, size_t sourceRow, int column);
+    void openCellEditor(DatasetState& dataset, size_t sourceRow, int column, bool namesTable = false);
     void openFlagEditor(DatasetState& dataset, size_t sourceRow, int column);
     void duplicateSelectedRow(DatasetState& dataset);
     void insertEmptyRow(DatasetState& dataset);
@@ -212,8 +217,17 @@ private:
     void refreshDependencies(DatasetState& dataset);
     void refreshCompareViewRows(DatasetState& dataset);
     int findColumnIndexByHeader(const std::vector<std::wstring>& headers, const std::wstring& name) const;
+    int detectPrimaryKeyColumn(const DatasetState& dataset) const;
+    void sortNamesTableByActiveOrder(DatasetState& dataset);
+    bool loadNamesFile(DatasetKind kind, const std::wstring& path);
+    void addRecentFile(const std::wstring& path);
+    void refreshFolderFiles(const std::wstring& folderPath);
     void transferCompareRowByHeader(DatasetState& dataset, const std::wstring& key, bool compareToActive);
     void transferCompareCellByHeader(DatasetState& dataset, const std::wstring& key, const std::wstring& columnName, bool compareToActive);
+    void sortDatasetByPrimaryKey(DatasetState& dataset);
+    int removeDuplicatePrimaryKeys(DatasetState& dataset, bool keepLast);
+    int normalizeRowWidths(DatasetState& dataset);
+    int fillEmptyIntegerCells(DatasetState& dataset, const std::wstring& fillValue);
     bool confirmDiscardChanges(const DatasetState& dataset, const wchar_t* action) const;
     bool hasActiveDataset() const;
     DatasetState& activeDataset();
@@ -251,6 +265,7 @@ private:
     size_t editSourceRow_ = 0;
     int editColumn_ = -1;
     bool editModalOpen_ = false;
+    bool editOnNamesTable_ = false;
 
     std::vector<std::wstring> flagSelection_;
     std::string flagSearch_;
@@ -301,6 +316,9 @@ private:
     std::string vnumStepBuffer_ = "1";
     bool vnumVisibleRowsOnly_ = true;
     int selectedSnapshotIndex_ = -1;
+    std::vector<std::wstring> recentFiles_;
+    std::wstring currentFolderPath_;
+    std::vector<std::wstring> currentFolderFiles_;
 };
 
 #endif

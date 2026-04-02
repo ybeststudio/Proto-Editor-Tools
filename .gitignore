@@ -1,0 +1,57 @@
+# Build directories
+/cpp/build/
+/cpp/build_log/
+/cpp/build_error/
+/cpp/.tmp/
+/cpp/out/
+/cpp/bin/
+/cpp/obj/
+
+# CMake / Ninja
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+
+# MSVC / linker outputs
+*.obj
+*.o
+*.pch
+*.pdb
+*.ilk
+*.idb
+*.ipdb
+*.iobj
+*.exp
+*.lib
+*.dll
+*.exe
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Archives
+*.zip
+*.7z
+*.rar
+
+# OS / explorer noise
+Thumbs.db
+Desktop.ini
+
+# Local shortcuts
+*.lnk

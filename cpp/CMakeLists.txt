@@ -36,7 +36,7 @@ if(WIN32)
     src/TsvFile.cpp
     src/ProtoConfig.cpp
     src/AppPreferences.cpp
-    app.rc
+    src/res/app.rc
   )
   target_compile_definitions(ProtoEditor PRIVATE UNICODE _UNICODE)
   target_compile_options(ProtoEditor PRIVATE /utf-8)

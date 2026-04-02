@@ -25,11 +25,14 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 - bulk edit operations
 - professional compare and validation tooling
 - linked names workflow
+- editable names tabs
+- folder-driven file loading workflow
 - workspace presets
 - snapshot backup protection
 - VNUM management tools
 - multi-cell block selection
 - dependency inspection tools
+- smart sort / cleanup / repair tools
 - embedded default proto config support
 - modern theming and RGB accent support
 
@@ -42,12 +45,15 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 - direct cell editing
 - smart flag editor
 - enum dropdown editor
+- editable `item_names` / `mob_names` tabs
 - row insert / duplicate / delete
 - go to VNUM
 - column add / rename / delete / reorder
 - column visibility and pin workflow
 - multi-cell block selection
 - column copy / paste workflow
+- drag and drop `.txt` file loading
+- double-click file loading from folder panel
 
 ### Mass Editing
 
@@ -66,6 +72,7 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 - undo / redo
 - history panel
 - modified cell tracking
+- build script with error pause and automatic error logs
 
 ### Advanced Tooling
 
@@ -77,6 +84,11 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 - linked `item_names` / `mob_names`
 - dependency checker
 - VNUM tools
+- smart VNUM sorting
+- duplicate key detection and cleanup
+- column width / row width normalization
+- empty numeric field repair
+- one-click smart fix workflow
 - global search
 - advanced filtering
 - export support
@@ -85,6 +97,9 @@ It is a dedicated `Metin2` tool built to make proto workflows faster, safer and 
 ### UI / UX
 
 - Dear ImGui desktop interface
+- folder panel for bulk `.txt` / `.tsv` discovery
+- file panel + workspace tabs
+- detail panel for row inspection
 - Turkish / English UI support
 - 5 built-in theme presets
 - theme builder
@@ -165,6 +180,14 @@ Encoding is preserved as accurately as possible during load/save:
 
 This is especially important for Turkish and Korean `Metin2` proto and names files.
 
+The build helper script also supports:
+
+- clean build by default
+- automatic incremental fallback if the build directory is locked
+- automatic `build_log` / `build_error` creation only on failure
+- automatic error log opening in Notepad
+- pause-on-error so the console does not close immediately
+
 ---
 
 ## Project Structure
@@ -176,9 +199,11 @@ ProtoEditor/
    ├─ CMakeLists.txt
    ├─ build.bat
    ├─ build_imgui.bat
-   ├─ app.rc
-   ├─ app.manifest
    └─ src/
+      ├─ res/
+      │  ├─ app.rc
+      │  ├─ app.manifest
+      │  └─ favicon.ico
       ├─ main.cpp
       ├─ ProtoEditorApp.cpp
       ├─ ProtoEditorApp.h
@@ -187,8 +212,7 @@ ProtoEditor/
       ├─ ProtoConfig.cpp
       ├─ ProtoConfig.h
       ├─ AppPreferences.cpp
-      ├─ AppPreferences.h
-      └─ favicon.ico
+      └─ AppPreferences.h
 ```
 
 ---
