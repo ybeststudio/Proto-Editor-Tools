@@ -230,9 +230,9 @@ ProtoEditor/
 - GitHub: [github.com/ybeststudio](https://github.com/ybeststudio)
 - Discord Server: [discord.gg/NXmc6JrwYr](https://discord.gg/NXmc6JrwYr)
 - Discord ID: `beststudio`
-- Web: [bestpro.dev](https://bestwebstudio.com.tr)
+- Web: [beststudio.dev](https://beststudio.dev)
 - E-Posta: [yakupp6@gmail.com](mailto:yakupp6@gmail.com)
-- YouTube: [youtube.com/@ybeststudio](https://www.youtube.com/@ybeststudio)
+- YouTube: [youtube.com/@ybeststudio](https://www.youtube.com/@ybeststudiostr)
 - Instagram: [instagram.com/ybeststudio](https://www.instagram.com/ybeststudio)
 - Facebook: [facebook.com/ybeststudio](https://www.facebook.com/ybeststudio/)
 - Twitter: [twitter.com/ybeststudio](https://twitter.com/ybeststudio)
